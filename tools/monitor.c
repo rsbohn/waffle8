@@ -6,6 +6,7 @@
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
+#include "../src/emulator/line_printer.h"
 
 static int parse_number(const char *token, long *value) {
     if (!token || !*token) {
@@ -48,6 +49,7 @@ static void print_help(void) {
 }
 
 int main(void) {
+    int exit_code = EXIT_SUCCESS;
     const pdp8_board_spec *board = pdp8_board_host_simulator();
     if (!board) {
         fprintf(stderr, "Unable to fetch host simulator board spec.\n");
@@ -57,6 +59,20 @@ int main(void) {
     pdp8_t *cpu = pdp8_api_create_for_board(board);
     if (!cpu) {
         fprintf(stderr, "Unable to create PDP-8 instance.\n");
+        return EXIT_FAILURE;
+    }
+
+    pdp8_line_printer_t *printer = pdp8_line_printer_create(stdout);
+    if (!printer) {
+        fprintf(stderr, "Unable to create line printer peripheral.\n");
+        pdp8_api_destroy(cpu);
+        return EXIT_FAILURE;
+    }
+
+    if (pdp8_line_printer_attach(cpu, printer) != 0) {
+        fprintf(stderr, "Unable to attach line printer peripheral.\n");
+        pdp8_line_printer_destroy(printer);
+        pdp8_api_destroy(cpu);
         return EXIT_FAILURE;
     }
 
@@ -222,6 +238,7 @@ int main(void) {
         }
     }
 
+    pdp8_line_printer_destroy(printer);
     pdp8_api_destroy(cpu);
-    return EXIT_SUCCESS;
+    return exit_code;
 }

@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""
+factory — load a PDP-8 ROM S-record, install a reset vector, and run the emulator.
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import ctypes
+
+
+RESET_VECTOR_ADDR = 0o0000
+RESET_POINTER_ADDR = 0o0020
+JMP_INDIRECT_20 = 0o5420  # JMP I 20, used as the reset vector
+DEFAULT_MEMORY_WORDS = 4096
+RUN_BLOCK_CYCLES = 10_000
+
+
+class EmulatorError(Exception):
+    """Raised when the emulator encounters an unrecoverable condition."""
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Load a PDP-8 ROM and start the factory.")
+    parser.add_argument(
+        "image",
+        type=Path,
+        help="Motorola S-record image (little-endian bytes per 12-bit word).",
+    )
+    return parser.parse_args()
+
+
+def load_srec(path: Path) -> List[Tuple[int, int]]:
+    """
+    Parse a little-endian Motorola S-record file into (word_address, word_value) pairs.
+
+    The PDP-8 uses 12-bit words. This loader combines consecutive byte pairs where
+    the low byte appears at the even address and the high byte follows.
+    """
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise EmulatorError(f"Unable to read {path}: {exc}") from exc
+
+    byte_map: Dict[int, int] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or not line.startswith("S"):
+            continue
+
+        record_type = line[1]
+        if record_type not in "123":  # Data-bearing record types
+            continue
+
+        try:
+            count = int(line[2:4], 16)
+        except ValueError as exc:
+            raise EmulatorError(f"Invalid byte count in record: {line}") from exc
+
+        addr_field_len = {"1": 4, "2": 6, "3": 8}[record_type]
+        addr_field = line[4 : 4 + addr_field_len]
+        data_field = line[4 + addr_field_len : -2]
+
+        try:
+            base_address = int(addr_field, 16)
+        except ValueError as exc:
+            raise EmulatorError(f"Invalid address field in record: {line}") from exc
+
+        if len(data_field) % 2 != 0:
+            raise EmulatorError(f"Odd number of data nybbles in record: {line}")
+
+        data_bytes = []
+        for idx in range(0, len(data_field), 2):
+            try:
+                data_bytes.append(int(data_field[idx : idx + 2], 16))
+            except ValueError as exc:
+                raise EmulatorError(f"Invalid data byte in record: {line}") from exc
+
+        expected_payload = count - (addr_field_len // 2) - 1
+        if expected_payload != len(data_bytes):
+            raise EmulatorError(f"Count mismatch in record: {line}")
+
+        for offset, value in enumerate(data_bytes):
+            byte_map[base_address + offset] = value
+
+    if not byte_map:
+        raise EmulatorError(f"No data records found in {path}")
+
+    words: Dict[int, int] = {}
+    for byte_address in sorted(byte_map):
+        if byte_address % 2 != 0:
+            continue  # wait for the even address
+        lo = byte_map.get(byte_address)
+        hi = byte_map.get(byte_address + 1)
+        if lo is None or hi is None:
+            raise EmulatorError(f"Incomplete word at byte address 0x{byte_address:04X}")
+        word_address = byte_address // 2
+        word_value = ((hi << 8) | lo) & 0x0FFF
+        words[word_address] = word_value
+
+    if not words:
+        raise EmulatorError("No complete words decoded from S-record.")
+
+    return sorted(words.items())
+
+
+def load_library() -> ctypes.CDLL:
+    root = Path(__file__).resolve().parent
+    lib_path = root / "libpdp8.so"
+    if not lib_path.exists():
+        raise EmulatorError(
+            f"{lib_path} not found. Build it with "
+            "'cc -std=c11 -Wall -Wextra -pedantic -fPIC -shared src/emulator/*.c -o libpdp8.so'."
+        )
+    try:
+        return ctypes.CDLL(str(lib_path))
+    except OSError as exc:
+        raise EmulatorError(f"Failed to load {lib_path}: {exc}") from exc
+
+
+def configure_api(lib: ctypes.CDLL) -> None:
+    lib.pdp8_api_create.argtypes = [ctypes.c_size_t]
+    lib.pdp8_api_create.restype = ctypes.c_void_p
+
+    lib.pdp8_api_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_destroy.restype = None
+
+    lib.pdp8_api_reset.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_reset.restype = None
+
+    lib.pdp8_api_write_mem.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_uint16]
+    lib.pdp8_api_write_mem.restype = ctypes.c_int
+
+    lib.pdp8_api_read_mem.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+    lib.pdp8_api_read_mem.restype = ctypes.c_uint16
+
+    lib.pdp8_api_set_pc.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+    lib.pdp8_api_set_pc.restype = None
+
+    lib.pdp8_api_get_pc.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_get_pc.restype = ctypes.c_uint16
+
+    lib.pdp8_api_get_ac.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_get_ac.restype = ctypes.c_uint16
+
+    lib.pdp8_api_get_link.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_get_link.restype = ctypes.c_uint8
+
+    lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_is_halted.restype = ctypes.c_int
+
+    lib.pdp8_api_run.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    lib.pdp8_api_run.restype = ctypes.c_int
+
+    lib.pdp8_api_set_switch_register.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+    lib.pdp8_api_set_switch_register.restype = None
+
+    lib.pdp8_line_printer_create.argtypes = [ctypes.c_void_p]
+    lib.pdp8_line_printer_create.restype = ctypes.c_void_p
+
+    lib.pdp8_line_printer_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_line_printer_destroy.restype = None
+
+    lib.pdp8_line_printer_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_line_printer_attach.restype = ctypes.c_int
+
+    lib.pdp8_line_printer_set_column_limit.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+    lib.pdp8_line_printer_set_column_limit.restype = ctypes.c_int
+
+
+def write_word(lib: ctypes.CDLL, cpu: int, address: int, value: int) -> None:
+    result = lib.pdp8_api_write_mem(cpu, ctypes.c_uint16(address), ctypes.c_uint16(value & 0x0FFF))
+    if result != 0:
+        raise EmulatorError(f"Failed to write memory at {address:04o}")
+
+
+def load_rom_into_memory(lib: ctypes.CDLL, cpu: int, rom_words: List[Tuple[int, int]]) -> Tuple[int, int]:
+    min_addr = min(addr for addr, _ in rom_words)
+    max_addr = max(addr for addr, _ in rom_words)
+
+    for address, value in rom_words:
+        if not (0 <= address < DEFAULT_MEMORY_WORDS):
+            raise EmulatorError(f"ROM word at {address:04o} exceeds available memory.")
+        write_word(lib, cpu, address, value)
+
+    start_address = min_addr
+    return start_address, max_addr
+
+
+def install_reset_vector(lib: ctypes.CDLL, cpu: int, start_address: int) -> None:
+    write_word(lib, cpu, RESET_VECTOR_ADDR, JMP_INDIRECT_20)
+    write_word(lib, cpu, RESET_POINTER_ADDR, start_address & 0x0FFF)
+    lib.pdp8_api_set_pc(cpu, ctypes.c_uint16(RESET_VECTOR_ADDR))
+
+
+def run_factory(lib: ctypes.CDLL, cpu: int) -> int:
+    total_cycles = 0
+    while not lib.pdp8_api_is_halted(cpu):
+        executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(RUN_BLOCK_CYCLES))
+        if executed < 0:
+            raise EmulatorError("Emulator reported an error during execution.")
+        if executed == 0:
+            break
+        total_cycles += executed
+    return total_cycles
+
+
+def report_state(lib: ctypes.CDLL, cpu: int, total_cycles: int) -> None:
+    pc = lib.pdp8_api_get_pc(cpu) & 0x0FFF
+    ac = lib.pdp8_api_get_ac(cpu) & 0x0FFF
+    link = lib.pdp8_api_get_link(cpu) & 0x1
+    halted = bool(lib.pdp8_api_is_halted(cpu))
+
+    print()
+    print("Factory run complete.")
+    print(f"  Cycles executed: {total_cycles}")
+    print(f"  PC: {pc:04o}")
+    print(f"  AC: {ac:04o}")
+    print(f"  LINK: {link}")
+    print(f"  HALT: {'yes' if halted else 'no'}")
+
+
+def main() -> int:
+    args = parse_args()
+    rom_words = load_srec(args.image)
+
+    lib = load_library()
+    configure_api(lib)
+
+    cpu = lib.pdp8_api_create(ctypes.c_size_t(DEFAULT_MEMORY_WORDS))
+    if not cpu:
+        raise EmulatorError("Failed to create PDP-8 instance.")
+
+    printer = None
+
+    try:
+        printer = lib.pdp8_line_printer_create(None)
+        if not printer:
+            raise EmulatorError("Failed to create line printer peripheral.")
+
+        if lib.pdp8_line_printer_attach(cpu, printer) != 0:
+            raise EmulatorError("Failed to attach line printer peripheral.")
+
+        lib.pdp8_api_reset(cpu)
+
+        start_address, end_address = load_rom_into_memory(lib, cpu, rom_words)
+        install_reset_vector(lib, cpu, start_address)
+
+        print(f"Loaded {len(rom_words)} word(s) from {start_address:04o} to {end_address:04o}.")
+        print(f"Reset vector set: 0000 -> JMP I 20, 0020 -> {start_address:04o}.")
+        print("Type 'go' to start the factory, or 'quit' to exit.")
+
+        while True:
+            try:
+                command = input("factory> ").strip().lower()
+            except EOFError:
+                command = "quit"
+            if command in ("go", "g"):
+                break
+            if command in ("quit", "exit", "q"):
+                print("Exiting without running.")
+                return 0
+            if not command:
+                continue
+            print("Enter 'go' to run or 'quit' to exit.")
+
+        total_cycles = run_factory(lib, cpu)
+        report_state(lib, cpu, total_cycles)
+
+    finally:
+        if printer:
+            lib.pdp8_line_printer_destroy(printer)
+        lib.pdp8_api_destroy(cpu)
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except EmulatorError as exc:
+        print(f"factory: {exc}", file=sys.stderr)
+        sys.exit(1)
