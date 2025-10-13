@@ -1,0 +1,8 @@
+*.PRG
+*.o
+*.list
+*.gif
+*.swp
+.envrc
+unit
+
