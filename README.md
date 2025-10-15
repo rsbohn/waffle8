@@ -29,6 +29,21 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
 - Not supporting all PDP-8 peripherals (only those needed for factory control)
 - Not a general-purpose PDP-8 emulator (specialized for RTS-8 + factory control)
 
+## Host Tools
+
+- `./factory <rom-image.srec>` loads a Motorola S-record ROM into the emulator, installs a `JMP I 20` reset vector, and waits for `go` before running.
+- Build `libpdp8.so` beforehand: `cc -std=c11 -Wall -Wextra -pedantic -fPIC -shared src/emulator/*.c -o libpdp8.so`.
+
+## Peripherals
+
+- Line printer peripheral sits on IOT device code `060`; use `6601` (skip if ready), `6602` (clear ready), and `6604` (print AC low 7 bits). Combine bits for multi-action sequences (`6606` for clear+print). Output goes to host stdout with a 132-column default width and CR/LF resetting the column counter.
+
+## ROM Images
+
+- ROM snapshots are stored as Motorola S-record files (`*.srec`) in little-endian byte order.
+- Use `./tools/dump-rom <image.srec>` to print the decoded 12-bit words in octal, eight words per line.
+- The monitor `save` and `restore` commands operate on raw 12-bit word dumps; convert as needed when moving between S-record files and monitor sessions.
+
 ## RTS-8 Features Used
 
 - Interrupt-driven I/O: All device handlers use interrupts

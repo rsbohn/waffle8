@@ -6,7 +6,8 @@ TEST_BINARY := pdp8_tests
 TEST_SOURCES := test_emulator.c
 CORE_SOURCES := ../src/emulator/main.c \
 	../src/emulator/board.c \
-	../src/emulator/kl8e_console.c
+	../src/emulator/kl8e_console.c \
+	../src/emulator/line_printer.c
 
 $(TEST_BINARY): $(TEST_SOURCES) $(CORE_SOURCES)
 	$(CC) $(CFLAGS) -o $@ $(TEST_SOURCES) $(CORE_SOURCES) $(LDFLAGS)

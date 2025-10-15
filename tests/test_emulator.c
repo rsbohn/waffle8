@@ -6,6 +6,7 @@
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
 #include "../src/emulator/kl8e_console.h"
+#include "../src/emulator/line_printer.h"
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
     do {                                                                                               \
@@ -265,6 +266,51 @@ static int test_kl8e_console(void) {
     return 1;
 }
 
+static int test_line_printer(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    FILE *sink = tmpfile();
+    if (!sink) {
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    pdp8_line_printer_t *printer = pdp8_line_printer_create(sink);
+    ASSERT_TRUE("line printer created", printer != NULL);
+    ASSERT_INT_EQ("line printer attach", 0, pdp8_line_printer_attach(cpu, printer));
+
+    pdp8_api_write_mem(cpu, 0000, 07200); /* CLA */
+    pdp8_api_write_mem(cpu, 0001, 01010); /* TAD 0010 */
+    pdp8_api_write_mem(cpu, 0002,
+                       PDP8_LINE_PRINTER_INSTR(PDP8_LINE_PRINTER_BIT_CLEAR | PDP8_LINE_PRINTER_BIT_PRINT));
+    pdp8_api_write_mem(cpu, 0003, PDP8_LINE_PRINTER_INSTR(PDP8_LINE_PRINTER_BIT_SKIP));
+    pdp8_api_write_mem(cpu, 0004, 07402); /* HLT */
+    pdp8_api_write_mem(cpu, 0005, 07402); /* HLT (skip target) */
+    pdp8_api_write_mem(cpu, 0010, 00101); /* ASCII 'A' */
+    pdp8_api_set_pc(cpu, 0000);
+
+    pdp8_api_run(cpu, 16);
+    ASSERT_INT_EQ("halted after print", 1, pdp8_api_is_halted(cpu));
+    ASSERT_EQ("PC after skip-ready", 0006, pdp8_api_get_pc(cpu));
+
+    fflush(sink);
+    long position = ftell(sink);
+    ASSERT_TRUE("line printer wrote data", position >= 1);
+    fseek(sink, 0, SEEK_SET);
+    char buffer[4] = {0};
+    size_t len = fread(buffer, 1, sizeof(buffer) - 1, sink);
+    ASSERT_INT_EQ("printed length", 1, len);
+    ASSERT_STR_EQ("printed character", "A", buffer);
+
+    pdp8_line_printer_destroy(printer);
+    fclose(sink);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_board_spec(void) {
     const pdp8_board_spec *spec = pdp8_board_adafruit_fruit_jam();
     ASSERT_TRUE("Fruit Jam spec available", spec != NULL);
@@ -294,6 +340,7 @@ int main(void) {
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},
         {"kl8e console", test_kl8e_console},
+        {"line printer", test_line_printer},
         {"fruit jam board", test_board_spec},
     };
 
