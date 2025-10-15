@@ -5,6 +5,7 @@
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
+#include "../src/emulator/kl8e_console.h"
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
     do {                                                                                               \
@@ -203,6 +204,67 @@ static int test_iot(void) {
     return 1;
 }
 
+static int test_kl8e_console(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    FILE *sink = tmpfile();
+    if (!sink) {
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    pdp8_kl8e_console_t *console = pdp8_kl8e_console_create(NULL, sink);
+    if (!console) {
+        fclose(sink);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    if (pdp8_kl8e_console_attach(cpu, console) != 0) {
+        pdp8_kl8e_console_destroy(console);
+        fclose(sink);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    ASSERT_INT_EQ("queue input", 0, pdp8_kl8e_console_queue_input(console, 'A'));
+
+    pdp8_api_write_mem(cpu, 0000, PDP8_KL8E_KEYBOARD_INSTR(PDP8_KL8E_KEYBOARD_BIT_SKIP));
+    pdp8_api_write_mem(cpu, 0001, 00000);
+    pdp8_api_write_mem(cpu, 0002,
+                       PDP8_KL8E_KEYBOARD_INSTR(PDP8_KL8E_KEYBOARD_BIT_CLEAR | PDP8_KL8E_KEYBOARD_BIT_READ));
+    pdp8_api_write_mem(cpu, 0003, PDP8_KL8E_TELEPRINTER_INSTR(PDP8_KL8E_TELEPRINTER_BIT_SKIP));
+    pdp8_api_write_mem(cpu, 0004, 00000);
+    pdp8_api_write_mem(cpu, 0005,
+                       PDP8_KL8E_TELEPRINTER_INSTR(PDP8_KL8E_TELEPRINTER_BIT_CLEAR | PDP8_KL8E_TELEPRINTER_BIT_LOAD));
+    pdp8_api_write_mem(cpu, 0006, 07402);
+
+    pdp8_api_set_pc(cpu, 0000);
+    pdp8_api_step(cpu);
+    ASSERT_EQ("KSF skip", 0002, pdp8_api_get_pc(cpu));
+
+    pdp8_api_step(cpu);
+    ASSERT_EQ("KRB loads AC", 'A' & 0x7F, pdp8_api_get_ac(cpu));
+    ASSERT_INT_EQ("input consumed", 0, (int)pdp8_kl8e_console_input_pending(console));
+
+    pdp8_api_step(cpu);
+    ASSERT_EQ("TSF skip", 0005, pdp8_api_get_pc(cpu));
+
+    pdp8_api_step(cpu);
+    ASSERT_INT_EQ("output buffered", 1, (int)pdp8_kl8e_console_output_pending(console));
+    uint8_t out_ch = 0;
+    ASSERT_INT_EQ("pop output", 0, pdp8_kl8e_console_pop_output(console, &out_ch));
+    ASSERT_EQ("output char", 'A' & 0x7F, out_ch);
+
+    pdp8_kl8e_console_destroy(console);
+    fclose(sink);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_board_spec(void) {
     const pdp8_board_spec *spec = pdp8_board_adafruit_fruit_jam();
     ASSERT_TRUE("Fruit Jam spec available", spec != NULL);
@@ -231,6 +293,7 @@ int main(void) {
         {"operate group 1", test_operate_group1},
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},
+        {"kl8e console", test_kl8e_console},
         {"fruit jam board", test_board_spec},
     };
 

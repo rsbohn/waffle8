@@ -4,10 +4,12 @@ factory — load a PDP-8 ROM S-record, install a reset vector, and run the emula
 """
 
 import argparse
+import errno
 import os
+import select
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, IO, List, Optional, Tuple
 
 import ctypes
 
@@ -158,6 +160,30 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_api_set_switch_register.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
     lib.pdp8_api_set_switch_register.restype = None
 
+    lib.pdp8_kl8e_console_create.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_kl8e_console_create.restype = ctypes.c_void_p
+
+    lib.pdp8_kl8e_console_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_kl8e_console_destroy.restype = None
+
+    lib.pdp8_kl8e_console_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_kl8e_console_attach.restype = ctypes.c_int
+
+    lib.pdp8_kl8e_console_queue_input.argtypes = [ctypes.c_void_p, ctypes.c_uint8]
+    lib.pdp8_kl8e_console_queue_input.restype = ctypes.c_int
+
+    lib.pdp8_kl8e_console_input_pending.argtypes = [ctypes.c_void_p]
+    lib.pdp8_kl8e_console_input_pending.restype = ctypes.c_size_t
+
+    lib.pdp8_kl8e_console_output_pending.argtypes = [ctypes.c_void_p]
+    lib.pdp8_kl8e_console_output_pending.restype = ctypes.c_size_t
+
+    lib.pdp8_kl8e_console_pop_output.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8)]
+    lib.pdp8_kl8e_console_pop_output.restype = ctypes.c_int
+
+    lib.pdp8_kl8e_console_flush.argtypes = [ctypes.c_void_p]
+    lib.pdp8_kl8e_console_flush.restype = ctypes.c_int
+
     lib.pdp8_line_printer_create.argtypes = [ctypes.c_void_p]
     lib.pdp8_line_printer_create.restype = ctypes.c_void_p
 
@@ -196,15 +222,65 @@ def install_reset_vector(lib: ctypes.CDLL, cpu: int, start_address: int) -> None
     lib.pdp8_api_set_pc(cpu, ctypes.c_uint16(RESET_VECTOR_ADDR))
 
 
-def run_factory(lib: ctypes.CDLL, cpu: int) -> int:
+def pump_console_input(
+    lib: ctypes.CDLL, console: int, stdin_fd: int, echo_stream: Optional[IO[str]] = None
+) -> bool:
+    if not console or stdin_fd < 0:
+        return True
+
+    ready, _, _ = select.select([stdin_fd], [], [], 0)
+    if not ready:
+        return True
+
+    try:
+        data = os.read(stdin_fd, 1024)
+    except OSError as exc:
+        if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+            return True
+        raise EmulatorError(f"Console read failed: {exc}") from exc
+
+    if not data:
+        return False
+
+    if echo_stream is not None and data:
+        echo_stream.write(data.decode("utf-8", errors="ignore"))
+        echo_stream.flush()
+
+    for byte in data:
+        value = 0x0D if byte == 0x0A else (byte & 0x7F)
+        if lib.pdp8_kl8e_console_queue_input(console, ctypes.c_uint8(value)) != 0:
+            raise EmulatorError("Failed to queue console input.")
+
+    return True
+
+
+def run_factory(
+    lib: ctypes.CDLL,
+    cpu: int,
+    console: int,
+    stdin_fd: int,
+    echo_stream: Optional[IO[str]] = None,
+) -> int:
     total_cycles = 0
     while not lib.pdp8_api_is_halted(cpu):
+        if not pump_console_input(lib, console, stdin_fd, echo_stream):
+            break
+
         executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(RUN_BLOCK_CYCLES))
         if executed < 0:
             raise EmulatorError("Emulator reported an error during execution.")
         if executed == 0:
             break
         total_cycles += executed
+
+    pump_console_input(lib, console, stdin_fd, echo_stream)
+    if console:
+        lib.pdp8_kl8e_console_flush(console)
+        while lib.pdp8_kl8e_console_output_pending(console):
+            byte = ctypes.c_uint8(0)
+            if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
+                break
+        sys.stdout.flush()
     return total_cycles
 
 
@@ -235,8 +311,17 @@ def main() -> int:
         raise EmulatorError("Failed to create PDP-8 instance.")
 
     printer = None
+    console = None
+    stdin_fd = -1
 
     try:
+        console = lib.pdp8_kl8e_console_create(None, None)
+        if not console:
+            raise EmulatorError("Failed to create KL8E console.")
+
+        if lib.pdp8_kl8e_console_attach(cpu, console) != 0:
+            raise EmulatorError("Failed to attach KL8E console.")
+
         printer = lib.pdp8_line_printer_create(None)
         if not printer:
             raise EmulatorError("Failed to create line printer peripheral.")
@@ -253,6 +338,18 @@ def main() -> int:
         print(f"Reset vector set: 0000 -> JMP I 20, 0020 -> {start_address:04o}.")
         print("Type 'go' to start the factory, or 'quit' to exit.")
 
+        try:
+            stdin_fd = sys.stdin.fileno()
+        except (OSError, AttributeError):
+            stdin_fd = -1
+        echo_stream: Optional[IO[str]] = None
+        if stdin_fd >= 0:
+            try:
+                if os.isatty(stdin_fd):
+                    echo_stream = sys.stdout
+            except OSError:
+                echo_stream = None
+
         while True:
             try:
                 command = input("factory> ").strip().lower()
@@ -267,10 +364,12 @@ def main() -> int:
                 continue
             print("Enter 'go' to run or 'quit' to exit.")
 
-        total_cycles = run_factory(lib, cpu)
+        total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream)
         report_state(lib, cpu, total_cycles)
 
     finally:
+        if console:
+            lib.pdp8_kl8e_console_destroy(console)
         if printer:
             lib.pdp8_line_printer_destroy(printer)
         lib.pdp8_api_destroy(cpu)

@@ -1,12 +1,16 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <stdint.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
 #include "../src/emulator/line_printer.h"
+#include "../src/emulator/kl8e_console.h"
 
 static int parse_number(const char *token, long *value) {
     if (!token || !*token) {
@@ -48,6 +52,84 @@ static void print_help(void) {
     puts("Notes: numbers default to octal; prefix with '#' for decimal or 0x for hex.");
 }
 
+static void pump_console_input(pdp8_kl8e_console_t *console, FILE *stream) {
+    if (!console || !stream) {
+        return;
+    }
+
+    while (true) {
+        errno = 0;
+        int ch = fgetc(stream);
+        if (ch == EOF) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                clearerr(stream);
+            } else if (feof(stream)) {
+                clearerr(stream);
+            }
+            break;
+        }
+
+        if (ch == '\n') {
+            ch = '\r';
+        }
+
+        (void)pdp8_kl8e_console_queue_input(console, (uint8_t)(ch & 0x7F));
+    }
+}
+
+#define MONITOR_RUN_SLICE 2000u
+
+static int run_with_console(pdp8_t *cpu, pdp8_kl8e_console_t *console, size_t cycles, FILE *input_stream) {
+    if (!cpu) {
+        return -1;
+    }
+
+    int input_fd = -1;
+    int original_flags = -1;
+    if (console && input_stream) {
+        input_fd = fileno(input_stream);
+        if (input_fd >= 0) {
+            original_flags = fcntl(input_fd, F_GETFL, 0);
+            if (original_flags != -1) {
+                if (fcntl(input_fd, F_SETFL, original_flags | O_NONBLOCK) == -1) {
+                    original_flags = -1;
+                }
+            }
+        }
+    }
+
+    size_t remaining = cycles;
+    int total_executed = 0;
+
+    while (remaining > 0u) {
+        pump_console_input(console, input_stream);
+
+        size_t request = remaining > MONITOR_RUN_SLICE ? MONITOR_RUN_SLICE : remaining;
+        int executed = pdp8_api_run(cpu, request);
+        if (executed <= 0) {
+            if (executed < 0) {
+                total_executed = executed;
+            }
+            break;
+        }
+
+        total_executed += executed;
+        remaining -= (size_t)executed;
+
+        if ((size_t)executed < request || pdp8_api_is_halted(cpu)) {
+            break;
+        }
+    }
+
+    pump_console_input(console, input_stream);
+
+    if (input_fd >= 0 && original_flags != -1) {
+        fcntl(input_fd, F_SETFL, original_flags);
+    }
+
+    return total_executed;
+}
+
 int main(void) {
     int exit_code = EXIT_SUCCESS;
     const pdp8_board_spec *board = pdp8_board_host_simulator();
@@ -62,9 +144,24 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
+    pdp8_kl8e_console_t *console = pdp8_kl8e_console_create(stdin, stdout);
+    if (!console) {
+        fprintf(stderr, "Unable to create KL8E console.\n");
+        pdp8_api_destroy(cpu);
+        return EXIT_FAILURE;
+    }
+
+    if (pdp8_kl8e_console_attach(cpu, console) != 0) {
+        fprintf(stderr, "Unable to attach KL8E console.\n");
+        pdp8_kl8e_console_destroy(console);
+        pdp8_api_destroy(cpu);
+        return EXIT_FAILURE;
+    }
+
     pdp8_line_printer_t *printer = pdp8_line_printer_create(stdout);
     if (!printer) {
         fprintf(stderr, "Unable to create line printer peripheral.\n");
+        pdp8_kl8e_console_destroy(console);
         pdp8_api_destroy(cpu);
         return EXIT_FAILURE;
     }
@@ -72,6 +169,7 @@ int main(void) {
     if (pdp8_line_printer_attach(cpu, printer) != 0) {
         fprintf(stderr, "Unable to attach line printer peripheral.\n");
         pdp8_line_printer_destroy(printer);
+        pdp8_kl8e_console_destroy(console);
         pdp8_api_destroy(cpu);
         return EXIT_FAILURE;
     }
@@ -178,7 +276,7 @@ int main(void) {
                 }
                 cycles = (size_t)cycles_val;
             }
-            int executed = pdp8_api_run(cpu, cycles);
+            int executed = run_with_console(cpu, console, cycles, stdin);
             if (executed < 0) {
                 fprintf(stderr, "Run failed.\n");
                 continue;
@@ -239,6 +337,7 @@ int main(void) {
     }
 
     pdp8_line_printer_destroy(printer);
+    pdp8_kl8e_console_destroy(console);
     pdp8_api_destroy(cpu);
     return exit_code;
 }
