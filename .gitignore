@@ -6,4 +6,5 @@
 *.swp
 .envrc
 unit
-
+.project
+__pycache__

@@ -9,6 +9,7 @@ Implemented a host-side KL8E console so RTS-8 and other terminal-driven software
 - Extended the Python factory runner to attach the console via ctypes, use `select()` on stdin for interactive sessions, and flush buffered output after each run block.
 - Added a regression in `tests/test_emulator.c` that asserts KSF/KRB/TLS semantics and linked the new device into the test binary via `tests/Makefile`.
 - Authored a `hello-kl8e.asm` line-echo sample (buffered KL8E KSF/KRB/TLS loop) and emitted a `hello-kl8e.srec` image so the console path can be demoed without RTS-8.
+- Implemented a structured `pdp8.config`, wired the monitor to parse and mount peripheral devices (KL8E, line printer, paper tape), and surfaced the configuration via a new `show devices` command.
 
 ## Validation
 ```shell

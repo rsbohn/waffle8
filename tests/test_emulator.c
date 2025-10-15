@@ -7,6 +7,8 @@
 #include "../src/emulator/pdp8_board.h"
 #include "../src/emulator/kl8e_console.h"
 #include "../src/emulator/line_printer.h"
+#include "../src/emulator/paper_tape.h"
+#include "../src/emulator/paper_tape_device.h"
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
     do {                                                                                               \
@@ -311,6 +313,113 @@ static int test_line_printer(void) {
     return 1;
 }
 
+static int test_paper_tape_parser(void) {
+    const char *path = "paper_tape_parser.tmp";
+    FILE *fp = fopen(path, "w");
+    if (!fp) {
+        return 0;
+    }
+
+    fprintf(fp, "AA001: 000000 000001 111111 000000\n");
+    fprintf(fp, "AA002: 101010 101010 010101 010101\n");
+    fclose(fp);
+
+    pdp8_paper_tape *image = NULL;
+    if (pdp8_paper_tape_load(path, &image) != 0) {
+        remove(path);
+        return 0;
+    }
+
+    ASSERT_TRUE("tape image present", image != NULL);
+    ASSERT_STR_EQ("tape label", "AA", image->label);
+    ASSERT_INT_EQ("two blocks parsed", 2, (int)image->block_count);
+
+    const pdp8_paper_tape_block *block1 = pdp8_paper_tape_find(image, 0001);
+    ASSERT_TRUE("block 001 present", block1 != NULL);
+    ASSERT_INT_EQ("block 001 word count", 2, (int)block1->word_count);
+    ASSERT_EQ("block 001 word 0", 000001, block1->words[0]);
+    ASSERT_EQ("block 001 word 1", 07700, block1->words[1]);
+
+    const pdp8_paper_tape_block *block2 = pdp8_paper_tape_find(image, 0002);
+    ASSERT_TRUE("block 002 present", block2 != NULL);
+    ASSERT_INT_EQ("block 002 word count", 2, (int)block2->word_count);
+    ASSERT_EQ("block 002 word 0", 05252, block2->words[0]);
+    ASSERT_EQ("block 002 word 1", 02525, block2->words[1]);
+
+    pdp8_paper_tape_destroy(image);
+    remove(path);
+
+    fp = fopen(path, "w");
+    if (!fp) {
+        return 0;
+    }
+
+    fputs("AA003:", fp);
+    for (size_t i = 0; i < PDP8_PAPER_TAPE_MAX_WORDS + 1; ++i) {
+        fputs(" 000000000000", fp);
+    }
+    fputc('\n', fp);
+    fclose(fp);
+
+    pdp8_paper_tape *too_large = NULL;
+    ASSERT_INT_EQ("block size limit enforced", -1,
+                  pdp8_paper_tape_load(path, &too_large));
+    ASSERT_TRUE("no tape returned on failure", too_large == NULL);
+    remove(path);
+
+    return 1;
+}
+
+static int test_paper_tape_device(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    pdp8_paper_tape_device_t *device = pdp8_paper_tape_device_create();
+    if (!device) {
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    ASSERT_INT_EQ("load tape image", 0, pdp8_paper_tape_device_load(device, "tapes/tp_demo.tape"));
+    ASSERT_STR_EQ("tape device label", "TP", pdp8_paper_tape_device_label(device));
+    ASSERT_INT_EQ("attach tape device", 0, pdp8_paper_tape_device_attach(cpu, device));
+
+    pdp8_api_write_mem(cpu, 0000, PDP8_PAPER_TAPE_INSTR(PDP8_PAPER_TAPE_BIT_SELECT));
+    pdp8_api_write_mem(cpu, 0001, PDP8_PAPER_TAPE_INSTR(PDP8_PAPER_TAPE_BIT_READ));
+    pdp8_api_write_mem(cpu, 0002, 05001); /* JMP 0001 */
+
+    pdp8_api_set_pc(cpu, 0000);
+    pdp8_api_set_ac(cpu, 0001);
+    ASSERT_INT_EQ("select block 1", 1, pdp8_api_step(cpu));
+
+    for (size_t i = 0; i < PDP8_PAPER_TAPE_MAX_WORDS; ++i) {
+        ASSERT_INT_EQ("read block 1 word", 1, pdp8_api_step(cpu));
+        ASSERT_EQ("block 1 data", 05252, pdp8_api_get_ac(cpu));
+        ASSERT_INT_EQ("loop block 1", 1, pdp8_api_step(cpu));
+    }
+
+    pdp8_api_set_ac(cpu, 0);
+    ASSERT_INT_EQ("read past block 1", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("block 1 exhausted", 0, pdp8_api_get_ac(cpu));
+    ASSERT_INT_EQ("loop after block 1 exhaustion", 1, pdp8_api_step(cpu));
+
+    pdp8_api_set_pc(cpu, 0000);
+    pdp8_api_set_ac(cpu, 0002);
+    ASSERT_INT_EQ("select block 2", 1, pdp8_api_step(cpu));
+
+    for (size_t i = 0; i < PDP8_PAPER_TAPE_MAX_WORDS; ++i) {
+        ASSERT_INT_EQ("read block 2 word", 1, pdp8_api_step(cpu));
+        ASSERT_EQ("block 2 data", 02445, pdp8_api_get_ac(cpu));
+        ASSERT_INT_EQ("loop block 2", 1, pdp8_api_step(cpu));
+    }
+
+    pdp8_paper_tape_device_destroy(device);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_board_spec(void) {
     const pdp8_board_spec *spec = pdp8_board_adafruit_fruit_jam();
     ASSERT_TRUE("Fruit Jam spec available", spec != NULL);
@@ -341,6 +450,8 @@ int main(void) {
         {"iot", test_iot},
         {"kl8e console", test_kl8e_console},
         {"line printer", test_line_printer},
+        {"paper tape parser", test_paper_tape_parser},
+        {"paper tape device", test_paper_tape_device},
         {"fruit jam board", test_board_spec},
     };
 

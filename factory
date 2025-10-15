@@ -8,6 +8,7 @@ import errno
 import os
 import select
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, IO, List, Optional, Tuple
 
@@ -19,6 +20,20 @@ RESET_POINTER_ADDR = 0o0020
 JMP_INDIRECT_20 = 0o5420  # JMP I 20, used as the reset vector
 DEFAULT_MEMORY_WORDS = 4096
 RUN_BLOCK_CYCLES = 10_000
+
+
+@dataclass
+class DeviceConfig:
+    kl8e_present: bool = True
+    kl8e_keyboard_input: str = "stdin"
+    kl8e_teleprinter_output: str = "stdout"
+
+    line_printer_present: bool = True
+    line_printer_output: str = "stdout"
+    line_printer_column_limit: int = 132
+
+    paper_tape_present: bool = False
+    paper_tape_image: Optional[str] = None
 
 
 class EmulatorError(Exception):
@@ -196,6 +211,21 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_line_printer_set_column_limit.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
     lib.pdp8_line_printer_set_column_limit.restype = ctypes.c_int
 
+    lib.pdp8_paper_tape_device_create.argtypes = []
+    lib.pdp8_paper_tape_device_create.restype = ctypes.c_void_p
+
+    lib.pdp8_paper_tape_device_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_paper_tape_device_destroy.restype = None
+
+    lib.pdp8_paper_tape_device_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_paper_tape_device_attach.restype = ctypes.c_int
+
+    lib.pdp8_paper_tape_device_load.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.pdp8_paper_tape_device_load.restype = ctypes.c_int
+
+    lib.pdp8_paper_tape_device_label.argtypes = [ctypes.c_void_p]
+    lib.pdp8_paper_tape_device_label.restype = ctypes.c_char_p
+
 
 def write_word(lib: ctypes.CDLL, cpu: int, address: int, value: int) -> None:
     result = lib.pdp8_api_write_mem(cpu, ctypes.c_uint16(address), ctypes.c_uint16(value & 0x0FFF))
@@ -299,12 +329,81 @@ def report_state(lib: ctypes.CDLL, cpu: int, total_cycles: int) -> None:
     print(f"  HALT: {'yes' if halted else 'no'}")
 
 
+def load_device_config(path: Path) -> Tuple[DeviceConfig, bool]:
+    config = DeviceConfig()
+    if not path.exists():
+        return config, False
+
+    try:
+        raw_lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise EmulatorError(f"Failed to read {path}: {exc}")
+
+    current: Optional[str] = None
+    for raw in raw_lines:
+        line, *_ = raw.split("#", 1)
+        line = line.strip()
+        if not line:
+            continue
+
+        if current is None:
+            if not line.lower().startswith("device"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            name = parts[1].strip().lower()
+            if not line.endswith("{"):
+                continue
+            current = name
+            if current == "paper_tape":
+                config.paper_tape_present = True
+            elif current == "kl8e_console":
+                config.kl8e_present = True
+            elif current == "line_printer":
+                config.line_printer_present = True
+            continue
+
+        if line == "}":
+            current = None
+            continue
+
+        if "=" not in line or current is None:
+            continue
+
+        key, value = (part.strip() for part in line.split("=", 1))
+        if not key or not value:
+            continue
+
+        if current == "kl8e_console":
+            if key == "keyboard_input":
+                config.kl8e_keyboard_input = value
+            elif key == "teleprinter_output":
+                config.kl8e_teleprinter_output = value
+        elif current == "line_printer":
+            if key == "output":
+                config.line_printer_output = value
+            elif key == "column_limit":
+                try:
+                    limit = int(value, 10)
+                    if limit > 0:
+                        config.line_printer_column_limit = limit
+                except ValueError:
+                    pass
+        elif current == "paper_tape":
+            if key == "image":
+                config.paper_tape_image = value
+
+    return config, True
+
+
 def main() -> int:
     args = parse_args()
     rom_words = load_srec(args.image)
 
     lib = load_library()
     configure_api(lib)
+    config, config_loaded = load_device_config(Path("pdp8.config"))
 
     cpu = lib.pdp8_api_create(ctypes.c_size_t(DEFAULT_MEMORY_WORDS))
     if not cpu:
@@ -312,6 +411,7 @@ def main() -> int:
 
     printer = None
     console = None
+    paper_tape_device = None
     stdin_fd = -1
 
     try:
@@ -328,6 +428,50 @@ def main() -> int:
 
         if lib.pdp8_line_printer_attach(cpu, printer) != 0:
             raise EmulatorError("Failed to attach line printer peripheral.")
+
+        lib.pdp8_line_printer_set_column_limit(
+            printer, ctypes.c_uint16(max(1, config.line_printer_column_limit))
+        )
+
+        if config.paper_tape_present and config.paper_tape_image:
+            paper_tape_device = lib.pdp8_paper_tape_device_create()
+            if not paper_tape_device:
+                print("Warning: failed to create paper tape device.", file=sys.stderr)
+            else:
+                image_path = Path(config.paper_tape_image)
+                if not image_path.is_file():
+                    print(
+                        f"Warning: paper tape image '{config.paper_tape_image}' not found.",
+                        file=sys.stderr,
+                    )
+                    lib.pdp8_paper_tape_device_destroy(paper_tape_device)
+                    paper_tape_device = None
+                else:
+                    if (
+                        lib.pdp8_paper_tape_device_load(
+                            paper_tape_device, str(image_path).encode("utf-8")
+                        )
+                        != 0
+                    ):
+                        print(
+                            f"Warning: failed to load paper tape image '{image_path}'.",
+                            file=sys.stderr,
+                        )
+                        lib.pdp8_paper_tape_device_destroy(paper_tape_device)
+                        paper_tape_device = None
+                    elif lib.pdp8_paper_tape_device_attach(cpu, paper_tape_device) != 0:
+                        print(
+                            "Warning: failed to attach paper tape device.",
+                            file=sys.stderr,
+                        )
+                        lib.pdp8_paper_tape_device_destroy(paper_tape_device)
+                        paper_tape_device = None
+                    else:
+                        label_ptr = lib.pdp8_paper_tape_device_label(paper_tape_device)
+                        label = label_ptr.decode("utf-8") if label_ptr else "(unknown)"
+                        print(f"Paper tape attached: {image_path} (label {label}).")
+        elif config.paper_tape_present:
+            print("Warning: paper_tape device configured without an image path.", file=sys.stderr)
 
         lib.pdp8_api_reset(cpu)
 
@@ -372,6 +516,8 @@ def main() -> int:
             lib.pdp8_kl8e_console_destroy(console)
         if printer:
             lib.pdp8_line_printer_destroy(printer)
+        if paper_tape_device:
+            lib.pdp8_paper_tape_device_destroy(paper_tape_device)
         lib.pdp8_api_destroy(cpu)
 
     return 0
