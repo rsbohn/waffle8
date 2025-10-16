@@ -45,7 +45,7 @@ Port the PDP-8 monitor (`tools/monitor.c`) from the POSIX host environment to th
    - Document any required Pico SDK setup or environment variables.
 
 6. **Reference & Documentation**
-   - Capture the Apple II emulator files used as references (paths/commits) within source comments or this doc.
+   - Capture the Reload Apple II Fruit Jam references (Adafruit guide: https://learn.adafruit.com/apple-e-emulator-on-fruit-jam/install-emulator, source repo: https://github.com/adafruit/reload-emulator) and note the exact commit(s) consulted in comments or this doc.
    - Add inline documentation summarising the Fruit Jam-specific initialisation steps.
 
 ## Constraints & Considerations
