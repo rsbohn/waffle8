@@ -551,6 +551,7 @@ static void print_help(void) {
     puts("  mem <addr> [count]         Dump memory words (octal).");
     puts("  dep <addr> <w0> [w1 ...]   Deposit consecutive words starting at addr.");
     puts("  run <addr> <cycles>        Set PC to addr then execute cycles.");
+    puts("  c [cycles]                 Continue execution for cycles (default 1).");
     puts("  regs                       Show PC, AC, link, switch register.");
     puts("  save <file>                Write RAM image to file.");
     puts("  restore <file>             Load RAM image from file.");
@@ -924,6 +925,26 @@ int main(void) {
             if (loaded > 0) {
                 printf("Deposited %zu word(s) starting at %04zo.\n", loaded, (size_t)addr_val % memory_words);
             }
+        } else if (strcmp(cmd, "c") == 0) {
+            char *cycles_tok = strtok(NULL, " \t");
+            long cycles_val = 1;
+            if (cycles_tok) {
+                if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+                    fprintf(stderr, "Invalid cycle count '%s'.\n", cycles_tok);
+                    continue;
+                }
+            }
+
+            pdp8_api_clear_halt(cpu);
+            size_t cycles = (size_t)cycles_val;
+            int executed = run_with_console(cpu, console, cycles, stdin);
+            if (executed < 0) {
+                fprintf(stderr, "Continue failed.\n");
+                continue;
+            }
+            printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
+                   executed, pdp8_api_get_pc(cpu) & 0x0FFFu,
+                   pdp8_api_is_halted(cpu) ? "yes" : "no");
         } else if (strcmp(cmd, "run") == 0) {
             char *start_tok = strtok(NULL, " \t");
             char *cycles_tok = strtok(NULL, " \t");
@@ -948,6 +969,7 @@ int main(void) {
                 continue;
             }
 
+            pdp8_api_clear_halt(cpu);
             pdp8_api_set_pc(cpu, (uint16_t)(start_val & 0x0FFFu));
             size_t cycles = (size_t)cycles_val;
             int executed = run_with_console(cpu, console, cycles, stdin);

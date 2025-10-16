@@ -15,6 +15,7 @@ typedef void (*pdp8_iot_handler)(pdp8_t *cpu, uint16_t instruction, void *contex
 pdp8_t *pdp8_api_create(size_t memory_size);
 void pdp8_api_destroy(pdp8_t *cpu);
 void pdp8_api_reset(pdp8_t *cpu);
+void pdp8_api_clear_halt(pdp8_t *cpu);
 int pdp8_api_step(pdp8_t *cpu);
 int pdp8_api_run(pdp8_t *cpu, size_t max_cycles);
 uint16_t pdp8_api_get_ac(const pdp8_t *cpu);

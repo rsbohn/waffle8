@@ -285,6 +285,13 @@ void pdp8_api_reset(pdp8_t *cpu) {
     }
 }
 
+void pdp8_api_clear_halt(pdp8_t *cpu) {
+    if (!cpu) {
+        return;
+    }
+    cpu->halted = false;
+}
+
 int pdp8_api_step(pdp8_t *cpu) {
     if (!cpu || cpu->halted || cpu->memory_words == 0) {
         return 0;

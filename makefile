@@ -23,4 +23,4 @@ monitor: $(MONITOR_OBJS)
 
 
 clean:
-	-@rm monitor $(FACTORY_LIB)
+	-@rm monitor $(FACTORY_LIB) tests/pdp8_tests

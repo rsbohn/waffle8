@@ -207,6 +207,30 @@ static int test_iot(void) {
     return 1;
 }
 
+static int test_clear_halt(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    pdp8_api_write_mem(cpu, 0000, 07402); /* HLT */
+    pdp8_api_set_pc(cpu, 0000);
+    ASSERT_INT_EQ("execute HLT", 1, pdp8_api_step(cpu));
+    ASSERT_TRUE("halt flag set", pdp8_api_is_halted(cpu) != 0);
+
+    pdp8_api_clear_halt(cpu);
+    ASSERT_TRUE("halt flag cleared", pdp8_api_is_halted(cpu) == 0);
+
+    pdp8_api_write_mem(cpu, 0001, 07001); /* IAC */
+    pdp8_api_set_ac(cpu, 07777);
+    pdp8_api_set_pc(cpu, 0001);
+    ASSERT_INT_EQ("run executes after clear", 1, pdp8_api_run(cpu, 1));
+    ASSERT_EQ("IAC result", 00000, pdp8_api_get_ac(cpu));
+
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_kl8e_console(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
     if (!cpu) {
@@ -448,6 +472,7 @@ int main(void) {
         {"operate group 1", test_operate_group1},
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},
+        {"clear halt", test_clear_halt},
         {"kl8e console", test_kl8e_console},
         {"line printer", test_line_printer},
         {"paper tape parser", test_paper_tape_parser},
