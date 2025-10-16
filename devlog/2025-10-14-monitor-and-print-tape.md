@@ -22,3 +22,9 @@ Read block 0001
 5252 5252 5252 5252 5252 5252 5252 5252 
 ...
 ```
+
+## Follow-up – Monitor UX and Fibonacci Sample
+- Reformatted the monitor `mem` dump so it emits eight words per line with repeated address headings, matching PDP-8 service printouts.
+- Renamed the `load` command to the more authentic `dep`, keeping the existing multi-word deposit behaviour and updating help text.
+- Added a `fib.asm` sample that prints the first five Fibonacci numbers via the KL8E console, demonstrating the assembler + monitor workflow end-to-end.
+- Synced `README.md` to highlight the Python assembler, S-record inspection tool, monitor commands, and the `python3 -m factory` entry point.

@@ -31,8 +31,11 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
 
 ## Host Tools
 
-- `./factory <rom-image.srec>` loads a Motorola S-record ROM into the emulator, installs a `JMP I 20` reset vector, and waits for `go` before running.
-- Build `libpdp8.so` beforehand: `cc -std=c11 -Wall -Wextra -pedantic -fPIC -shared src/emulator/*.c -o libpdp8.so`.
+- `python3 -m factory <rom-image.srec>` loads a Motorola S-record ROM into the emulator, installs a `JMP I 20` reset vector, and waits for `go` before running. (The module uses `factory/libpdp8.so`; build it with `make factory/libpdp8.so`.)
+- Assemble PAL-style sources with `python3 tools/pdp8_asm.py program.asm program.srec`.
+- Inspect ROM contents with `./tools/dump-rom program.srec`.
+- Build the interactive monitor with `make monitor`; run `./monitor` for manual inspection and device poking.
+- Monitor commands mirror PDP-8 conventions: `dep` deposits consecutive words at an address, and `mem` displays dumps eight words per line.
 
 ## Peripherals
 

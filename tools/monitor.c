@@ -549,7 +549,7 @@ static int load_srec_image(pdp8_t *cpu,
 static void print_help(void) {
     puts("Commands:");
     puts("  mem <addr> [count]         Dump memory words (octal).");
-    puts("  load <addr> <w0> [w1 ...]  Write consecutive words starting at addr.");
+    puts("  dep <addr> <w0> [w1 ...]   Deposit consecutive words starting at addr.");
     puts("  run <addr> <cycles>        Set PC to addr then execute cycles.");
     puts("  regs                       Show PC, AC, link, switch register.");
     puts("  save <file>                Write RAM image to file.");
@@ -878,12 +878,23 @@ int main(void) {
             for (long i = 0; i < count_val; ++i) {
                 size_t current = (address + (size_t)i) % memory_words;
                 uint16_t word = pdp8_api_read_mem(cpu, (uint16_t)current);
-                printf("%04zo: %04o\n", current, word & 0x0FFFu);
+
+                if (i % 8 == 0) {
+                    if (i > 0) {
+                        putchar('\n');
+                    }
+                    printf("%04zo:", current);
+                }
+
+                printf(" %04o", word & 0x0FFFu);
             }
-        } else if (strcmp(cmd, "load") == 0) {
+            if (count_val > 0) {
+                putchar('\n');
+            }
+        } else if (strcmp(cmd, "dep") == 0) {
             char *addr_tok = strtok(NULL, " \t");
             if (!addr_tok) {
-                fprintf(stderr, "load requires address.\n");
+                fprintf(stderr, "dep requires address.\n");
                 continue;
             }
             long addr_val = 0;
@@ -911,7 +922,7 @@ int main(void) {
             }
 
             if (loaded > 0) {
-                printf("Loaded %zu word(s) starting at %04zo.\n", loaded, (size_t)addr_val % memory_words);
+                printf("Deposited %zu word(s) starting at %04zo.\n", loaded, (size_t)addr_val % memory_words);
             }
         } else if (strcmp(cmd, "run") == 0) {
             char *start_tok = strtok(NULL, " \t");
