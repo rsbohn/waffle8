@@ -299,14 +299,262 @@ static int parse_number(const char *token, long *value) {
     return 0;
 }
 
+static int load_srec_image(pdp8_t *cpu,
+                           const char *path,
+                           size_t memory_words,
+                           size_t *words_loaded,
+                           size_t *highest_address,
+                           uint16_t *start_pc,
+                           bool *start_pc_valid) {
+    if (!cpu || !path) {
+        return -1;
+    }
+
+    if (memory_words == 0) {
+        memory_words = 4096u;
+    }
+
+    const size_t memory_bytes = memory_words * 2u;
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        fprintf(stderr, "Unable to open '%s' for reading: %s\n", path, strerror(errno));
+        return -1;
+    }
+
+    uint8_t *byte_data = (uint8_t *)calloc(memory_bytes, sizeof(uint8_t));
+    bool *byte_present = (bool *)calloc(memory_bytes, sizeof(bool));
+    if (!byte_data || !byte_present) {
+        fprintf(stderr, "Unable to allocate buffer for '%s'.\n", path);
+        free(byte_data);
+        free(byte_present);
+        fclose(fp);
+        return -1;
+    }
+
+    char line[1024];
+    bool have_data = false;
+    bool start_seen = false;
+    unsigned long start_byte_address = 0ul;
+
+    while (fgets(line, sizeof line, fp) != NULL) {
+        char *cursor = line;
+        while (*cursor && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+
+        size_t len = strlen(cursor);
+        while (len > 0 && isspace((unsigned char)cursor[len - 1])) {
+            cursor[--len] = '\0';
+        }
+
+        if (len == 0 || cursor[0] == '\0') {
+            continue;
+        }
+
+        if (cursor[0] != 'S' && cursor[0] != 's') {
+            continue;
+        }
+
+        const char type = (char)toupper((unsigned char)cursor[1]);
+        if (type == '\0') {
+            continue;
+        }
+
+        if (type == '1' || type == '2' || type == '3') {
+            const size_t addr_digits = (type == '1') ? 4u : (type == '2') ? 6u : 8u;
+            const size_t addr_bytes = addr_digits / 2u;
+
+            if (len < 4u + addr_digits + 2u) {
+                fprintf(stderr, "Malformed S-record line (too short): %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            char count_str[3] = {cursor[2], cursor[3], '\0'};
+            char *endptr = NULL;
+            unsigned long count = strtoul(count_str, &endptr, 16);
+            if (!endptr || *endptr != '\0') {
+                fprintf(stderr, "Malformed byte count in line: %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            char addr_buf[9];
+            memcpy(addr_buf, cursor + 4, addr_digits);
+            addr_buf[addr_digits] = '\0';
+            endptr = NULL;
+            unsigned long base_address = strtoul(addr_buf, &endptr, 16);
+            if (!endptr || *endptr != '\0') {
+                fprintf(stderr, "Malformed address in line: %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            const size_t checksum_offset = len - 2u;
+            if (checksum_offset < 4u + addr_digits) {
+                fprintf(stderr, "Malformed data section in line: %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            const char *data_ptr = cursor + 4 + addr_digits;
+            const size_t data_hex_len = checksum_offset - (size_t)(data_ptr - cursor);
+            if (data_hex_len % 2u != 0) {
+                fprintf(stderr, "Odd data length in line: %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            const size_t data_bytes = data_hex_len / 2u;
+            if (count != data_bytes + addr_bytes + 1u) {
+                fprintf(stderr, "Count mismatch for line: %s\n", cursor);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
+            }
+
+            for (size_t i = 0; i < data_bytes; ++i) {
+                char byte_buf[3] = {data_ptr[i * 2u], data_ptr[i * 2u + 1u], '\0'};
+                endptr = NULL;
+                unsigned long value = strtoul(byte_buf, &endptr, 16);
+                if (!endptr || *endptr != '\0' || value > 0xFFul) {
+                    fprintf(stderr, "Malformed data byte in line: %s\n", cursor);
+                    free(byte_data);
+                    free(byte_present);
+                    fclose(fp);
+                    return -1;
+                }
+
+                const size_t absolute = base_address + i;
+                if (absolute >= memory_bytes) {
+                    fprintf(stderr,
+                            "Warning: S-record byte address 0x%lX exceeds memory (max 0x%llX). Skipping.\n",
+                            base_address + i,
+                            memory_bytes ? (unsigned long long)(memory_bytes - 1u) : 0ull);
+                    continue;
+                }
+
+                byte_data[absolute] = (uint8_t)value;
+                byte_present[absolute] = true;
+                have_data = true;
+            }
+        } else if (type == '7' || type == '8' || type == '9') {
+            const size_t addr_digits = (type == '9') ? 4u : (type == '8') ? 6u : 8u;
+            if (len < 4u + addr_digits) {
+                continue;
+            }
+            char addr_buf[9];
+            if (addr_digits >= sizeof addr_buf) {
+                continue;
+            }
+            memcpy(addr_buf, cursor + 4, addr_digits);
+            addr_buf[addr_digits] = '\0';
+            char *endptr = NULL;
+            unsigned long start_addr = strtoul(addr_buf, &endptr, 16);
+            if (endptr && *endptr == '\0') {
+                start_byte_address = start_addr;
+                start_seen = true;
+            }
+        }
+    }
+
+    fclose(fp);
+    fp = NULL;
+
+    if (!have_data) {
+        fprintf(stderr, "No data records found in '%s'.\n", path);
+        free(byte_data);
+        free(byte_present);
+        return -1;
+    }
+
+    size_t written_words = 0;
+    size_t highest_word = 0;
+    bool encountered_partial = false;
+
+    for (size_t word = 0; word < memory_words; ++word) {
+        const size_t lo_index = word * 2u;
+        const size_t hi_index = lo_index + 1u;
+        const bool have_lo = (lo_index < memory_bytes) && byte_present[lo_index];
+        const bool have_hi = (hi_index < memory_bytes) && byte_present[hi_index];
+
+        if (have_lo && have_hi) {
+            const uint16_t value =
+                ((uint16_t)(byte_data[hi_index] & 0x0Fu) << 8) | (uint16_t)byte_data[lo_index];
+            if (pdp8_api_write_mem(cpu, (uint16_t)word, value & 0x0FFFu) != 0) {
+                fprintf(stderr, "Failed to write memory at %04zo.\n", word);
+                free(byte_data);
+                free(byte_present);
+                return -1;
+            }
+            written_words++;
+            highest_word = word;
+        } else if (have_lo || have_hi) {
+            encountered_partial = true;
+        }
+    }
+
+    if (written_words == 0) {
+        fprintf(stderr, "Parsed data from '%s' but no complete words were written.\n", path);
+        free(byte_data);
+        free(byte_present);
+        return -1;
+    }
+
+    if (words_loaded) {
+        *words_loaded = written_words;
+    }
+    if (highest_address) {
+        *highest_address = highest_word;
+    }
+    if (start_pc_valid) {
+        *start_pc_valid = false;
+    }
+    if (start_pc) {
+        *start_pc = 0;
+    }
+    if (start_seen) {
+        uint16_t computed_pc = (uint16_t)((start_byte_address / 2u) & 0x0FFFu);
+        if (start_pc) {
+            *start_pc = computed_pc;
+        }
+        if (start_pc_valid) {
+            *start_pc_valid = true;
+        }
+    }
+
+    if (encountered_partial) {
+        fprintf(stderr,
+                "Warning: Incomplete word(s) encountered while reading '%s'; skipped those entries.\n",
+                path);
+    }
+
+    free(byte_data);
+    free(byte_present);
+    return 0;
+}
+
 static void print_help(void) {
     puts("Commands:");
     puts("  mem <addr> [count]         Dump memory words (octal).");
     puts("  load <addr> <w0> [w1 ...]  Write consecutive words starting at addr.");
-    puts("  run [cycles]               Execute up to cycles (default 1000).");
+    puts("  run <addr> <cycles>        Set PC to addr then execute cycles.");
     puts("  regs                       Show PC, AC, link, switch register.");
     puts("  save <file>                Write RAM image to file.");
     puts("  restore <file>             Load RAM image from file.");
+    puts("  read <file>                Load Motorola S-record image and apply start address.");
     puts("  reset                      Clear state and reload board ROM.");
     puts("  show devices               List attached peripherals and configuration.");
     puts("  help                       Show this help.");
@@ -666,16 +914,31 @@ int main(void) {
                 printf("Loaded %zu word(s) starting at %04zo.\n", loaded, (size_t)addr_val % memory_words);
             }
         } else if (strcmp(cmd, "run") == 0) {
+            char *start_tok = strtok(NULL, " \t");
             char *cycles_tok = strtok(NULL, " \t");
-            size_t cycles = 1000;
-            if (cycles_tok) {
-                long cycles_val = 0;
-                if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
-                    fprintf(stderr, "Invalid cycle count '%s'.\n", cycles_tok);
-                    continue;
-                }
-                cycles = (size_t)cycles_val;
+            if (!start_tok || !cycles_tok) {
+                fprintf(stderr, "run requires start address and cycle count.\n");
+                continue;
             }
+
+            long start_val = 0;
+            if (parse_number(start_tok, &start_val) != 0 || start_val < 0) {
+                fprintf(stderr, "Invalid start address '%s'.\n", start_tok);
+                continue;
+            }
+            if ((size_t)start_val >= memory_words) {
+                fprintf(stderr, "Start address %04lo exceeds memory size.\n", start_val);
+                continue;
+            }
+
+            long cycles_val = 0;
+            if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+                fprintf(stderr, "Invalid cycle count '%s'.\n", cycles_tok);
+                continue;
+            }
+
+            pdp8_api_set_pc(cpu, (uint16_t)(start_val & 0x0FFFu));
+            size_t cycles = (size_t)cycles_val;
             int executed = run_with_console(cpu, console, cycles, stdin);
             if (executed < 0) {
                 fprintf(stderr, "Run failed.\n");
@@ -728,6 +991,33 @@ int main(void) {
             }
             fclose(fp);
             printf("Restored %zu word(s) from %s.\n", restored, path);
+        } else if (strcmp(cmd, "read") == 0) {
+            char *path = strtok(NULL, " \t");
+            if (!path) {
+                fprintf(stderr, "read requires file path.\n");
+                continue;
+            }
+
+            size_t words_loaded = 0;
+            size_t highest_address = 0;
+            uint16_t start_address = 0;
+            bool start_valid = false;
+
+            if (load_srec_image(cpu, path, memory_words, &words_loaded, &highest_address,
+                                &start_address, &start_valid) != 0) {
+                continue;
+            }
+
+            printf("Loaded %zu word(s) from %s", words_loaded, path);
+            if (words_loaded > 0) {
+                printf(" (last %04zo)", highest_address);
+            }
+            puts(".");
+
+            if (start_valid) {
+                pdp8_api_set_pc(cpu, start_address & 0x0FFFu);
+                printf("Start address %04o set as PC.\n", start_address & 0x0FFFu);
+            }
         } else if (strcmp(cmd, "show") == 0) {
             char *topic = strtok(NULL, " \t");
             if (!topic) {

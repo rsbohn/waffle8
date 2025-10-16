@@ -194,11 +194,15 @@ class PDP8Assembler:
                 # Plain numeric literal?
                 try:
                     value = self._parse_number(tokens[0])
-                except ValueError as exc:
-                    raise AsmError(f"Unrecognised statement '{part}'", line_no) from exc
-                self.statements.append(
-                    Statement("data", location, (value,), line_no, part)
-                )
+                except ValueError:
+                    symbol = tokens[0]
+                    self.statements.append(
+                        Statement("data_symbol", location, (symbol,), line_no, part)
+                    )
+                else:
+                    self.statements.append(
+                        Statement("data", location, (value,), line_no, part)
+                    )
                 location += 1
 
     def _resolve_symbol(self, token: str, line_no: int, text: str) -> int:
@@ -215,6 +219,12 @@ class PDP8Assembler:
         for stmt in self.statements:
             if stmt.kind == "data":
                 value = stmt.args[0] & 0x0FFF
+                memory[stmt.address] = value
+                continue
+
+            if stmt.kind == "data_symbol":
+                symbol_token = stmt.args[0]
+                value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text) & 0x0FFF
                 memory[stmt.address] = value
                 continue
 

@@ -18,13 +18,16 @@ START,  CLA CLL                 / Clear AC and Link
         TAD BLKNUM              / Load block number to read
         IOT 6672                / Select block on paper tape
         
-        TAD MSGBLK              / Print block header message
+        CLA                     / Ensure AC cleared before loading pointer
+        TAD MSGBLK_PTR          / Print block header message
         JMS PRINT
         
+        CLA
         TAD BLKNUM              / Print block number
         JMS PRTNUM
         
-        TAD MSGNL               / Print newline
+        CLA
+        TAD MSGNL_PTR           / Print newline
         JMS PRINT
 
 RDLOOP, IOT 6671                / Skip if tape ready
@@ -37,6 +40,7 @@ RDLOOP, IOT 6671                / Skip if tape ready
         TAD WORD                / Get word back
         JMS PRTNUM              / Print as octal number
         
+        CLA
         TAD SPACE               / Print space separator
         JMS PUTCH
         
@@ -49,13 +53,16 @@ RDLOOP, IOT 6671                / Skip if tape ready
         JMP RDLOOP              / Continue reading
         
 / Reached here when block exhausted (6671 no longer skips)
-DONE,   TAD MSGDONE             / Print completion message
+DONE,   CLA
+        TAD MSGDONE_PTR         / Print completion message
         JMS PRINT
         
+        CLA
         TAD COUNT               / Print total word count
         JMS PRTNUM
         
-        TAD MSGNL
+        CLA
+        TAD MSGNL_PTR
         JMS PRINT
         
         HLT                     / Stop
@@ -85,6 +92,7 @@ PUTCH1, IOT 6041                / Skip if teleprinter ready
         JMP PUTCH1              / Wait
         TAD CHBUF               / Get character
         IOT 6046                / Print it
+        CLA
         JMP I PUTCH             / Return
 
 /------------------------------------------------------------
@@ -159,6 +167,11 @@ K7,     0007                    / Mask for low 3 bits
 K0070,  0070                    / Mask for bits 3-5
 K0700,  0700                    / Mask for bits 6-8
 K7000,  7000                    / Mask for bits 9-11
+
+/ Message pointers
+MSGBLK_PTR, MSGBLK
+MSGNL_PTR, MSGNL
+MSGDONE_PTR, MSGDONE
 
 / Messages (null-terminated strings)
 MSGBLK, "R";"e";"a";"d";" ";"b";"l";"o";"c";"k";" ";0000
