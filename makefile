@@ -15,6 +15,12 @@ MONITOR_OBJS = tools/monitor.c \
 	src/emulator/paper_tape.c \
 	src/emulator/paper_tape_device.c
 
+FACTORY_LIB = factory/libpdp8.so
+FACTORY_SOURCES = $(wildcard src/emulator/*.c)
+
+$(FACTORY_LIB): $(FACTORY_SOURCES)
+	$(HOST_CC) $(HOST_CFLAGS) -fPIC -shared $^ -o $@
+
 monitor: $(MONITOR_OBJS)
 	$(HOST_CC) $(HOST_CFLAGS) $(filter %.c,$^) -o $@
 
@@ -32,4 +38,4 @@ TEST.PRG: test.c scan.c scan.h
 
 
 clean:
-	-@rm dump* memory.bin monitor
+	-@rm dump* memory.bin monitor $(FACTORY_LIB)
