@@ -3,12 +3,14 @@ ALL: $(FACTORY_LIB) monitor
 HOST_CC ?= cc
 HOST_CFLAGS ?= -std=c11 -Wall -Wextra -pedantic
 MONITOR_OBJS = tools/monitor.c \
-	src/emulator/main.c \
-	src/emulator/board.c \
-	src/emulator/kl8e_console.c \
-	src/emulator/line_printer.c \
-	src/emulator/paper_tape.c \
-	src/emulator/paper_tape_device.c
+        src/monitor_config.c \
+        src/monitor_platform_posix.c \
+        src/emulator/main.c \
+        src/emulator/board.c \
+        src/emulator/kl8e_console.c \
+        src/emulator/line_printer.c \
+        src/emulator/paper_tape.c \
+        src/emulator/paper_tape_device.c
 
 FACTORY_LIB = factory/libpdp8.so
 FACTORY_SOURCES = $(wildcard src/emulator/*.c)

@@ -1,228 +1,93 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
-#include <fcntl.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdbool.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <stdint.h>
-#include <limits.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/kl8e_console.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/monitor_config.h"
+#include "../src/monitor_platform.h"
 
-struct monitor_config {
-    bool kl8e_present;
-    char *kl8e_keyboard_iot;
-    char *kl8e_keyboard_input;
-    char *kl8e_teleprinter_iot;
-    char *kl8e_teleprinter_output;
-
-    bool line_printer_present;
-    char *line_printer_iot;
-    char *line_printer_output;
-    int line_printer_column_limit;
-
-    bool paper_tape_present;
-    char *paper_tape_iot;
-    char *paper_tape_image;
+struct monitor_runtime {
+    pdp8_t *cpu;
+    pdp8_kl8e_console_t *console;
+    pdp8_line_printer_t *printer;
+    pdp8_paper_tape_device_t *paper_tape;
+    struct monitor_config config;
+    bool config_loaded;
+    size_t memory_words;
 };
 
-static void monitor_config_init(struct monitor_config *config) {
-    if (!config) {
-        return;
-    }
-    memset(config, 0, sizeof(*config));
-    config->line_printer_column_limit = 132;
-}
+static pdp8_kl8e_console_t *g_console = NULL;
 
-static void monitor_config_clear(struct monitor_config *config) {
-    if (!config) {
-        return;
-    }
-    free(config->kl8e_keyboard_iot);
-    free(config->kl8e_keyboard_input);
-    free(config->kl8e_teleprinter_iot);
-    free(config->kl8e_teleprinter_output);
-    free(config->line_printer_iot);
-    free(config->line_printer_output);
-    free(config->paper_tape_iot);
-    free(config->paper_tape_image);
-    monitor_config_init(config);
-}
-
-static int monitor_config_set_string(char **slot, const char *value) {
-    if (!slot) {
-        return -1;
-    }
-    char *copy = NULL;
-    if (value) {
-        size_t len = strlen(value) + 1u;
-        copy = (char *)malloc(len);
-        if (!copy) {
-            errno = ENOMEM;
-            return -1;
-        }
-        memcpy(copy, value, len);
-    }
-    free(*slot);
-    *slot = copy;
-    return 0;
-}
-
-static char *trim_whitespace(char *text) {
+static void monitor_console_write(const char *text, size_t length) {
     if (!text) {
-        return NULL;
+        return;
     }
-    while (*text && isspace((unsigned char)*text)) {
-        ++text;
+    for (size_t i = 0; i < length; ++i) {
+        monitor_platform_console_putc((uint8_t)text[i]);
     }
-    if (*text == '\0') {
-        return text;
-    }
-    char *end = text + strlen(text) - 1;
-    while (end > text && isspace((unsigned char)*end)) {
-        --end;
-    }
-    end[1] = '\0';
-    return text;
 }
 
-static int monitor_config_load(const char *path, struct monitor_config *config) {
-    if (!path || !config) {
-        return -1;
+static void monitor_console_vprintf(const char *fmt, va_list args) {
+    if (!fmt) {
+        return;
     }
 
-    monitor_config_init(config);
-
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        return errno == ENOENT ? 1 : -1;
+    char stack_buffer[256];
+    va_list copy;
+    va_copy(copy, args);
+    int required = vsnprintf(stack_buffer, sizeof stack_buffer, fmt, copy);
+    va_end(copy);
+    if (required < 0) {
+        return;
     }
 
-    char line[512];
-    char current_device[64] = {0};
-    while (fgets(line, sizeof line, fp) != NULL) {
-        char *hash = strchr(line, '#');
-        if (hash) {
-            *hash = '\0';
-        }
-        char *trimmed = trim_whitespace(line);
-        if (!trimmed || *trimmed == '\0') {
-            continue;
-        }
-
-        if (current_device[0] == '\0') {
-            if (strncmp(trimmed, "device", 6) != 0 || !isspace((unsigned char)trimmed[6])) {
-                continue;
-            }
-            char *cursor = trimmed + 6;
-            while (*cursor && isspace((unsigned char)*cursor)) {
-                ++cursor;
-            }
-            size_t name_len = 0;
-            while (cursor[name_len] && !isspace((unsigned char)cursor[name_len]) && cursor[name_len] != '{') {
-                if (name_len + 1 >= sizeof current_device) {
-                    break;
-                }
-                current_device[name_len] = cursor[name_len];
-                ++name_len;
-            }
-            current_device[name_len] = '\0';
-            cursor += name_len;
-            while (*cursor && isspace((unsigned char)*cursor)) {
-                ++cursor;
-            }
-            if (*cursor != '{') {
-                current_device[0] = '\0';
-                continue;
-            }
-            continue;
-        }
-
-        if (strcmp(trimmed, "}") == 0) {
-            current_device[0] = '\0';
-            continue;
-        }
-
-        char *equals = strchr(trimmed, '=');
-        if (!equals) {
-            continue;
-        }
-        *equals = '\0';
-        char *key = trim_whitespace(trimmed);
-        char *value = trim_whitespace(equals + 1);
-        if (!key || !value || *key == '\0' || *value == '\0') {
-            continue;
-        }
-
-        if (strcmp(current_device, "kl8e_console") == 0) {
-            config->kl8e_present = true;
-            if (strcmp(key, "keyboard_iot") == 0) {
-                if (monitor_config_set_string(&config->kl8e_keyboard_iot, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "teleprinter_iot") == 0) {
-                if (monitor_config_set_string(&config->kl8e_teleprinter_iot, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "keyboard_input") == 0) {
-                if (monitor_config_set_string(&config->kl8e_keyboard_input, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "teleprinter_output") == 0) {
-                if (monitor_config_set_string(&config->kl8e_teleprinter_output, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            }
-        } else if (strcmp(current_device, "line_printer") == 0) {
-            config->line_printer_present = true;
-            if (strcmp(key, "iot") == 0) {
-                if (monitor_config_set_string(&config->line_printer_iot, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "output") == 0) {
-                if (monitor_config_set_string(&config->line_printer_output, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "column_limit") == 0) {
-                long parsed = strtol(value, NULL, 10);
-                if (parsed > 0 && parsed <= INT32_MAX) {
-                    config->line_printer_column_limit = (int)parsed;
-                }
-            }
-        } else if (strcmp(current_device, "paper_tape") == 0) {
-            config->paper_tape_present = true;
-            if (strcmp(key, "iot") == 0) {
-                if (monitor_config_set_string(&config->paper_tape_iot, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            } else if (strcmp(key, "image") == 0) {
-                if (monitor_config_set_string(&config->paper_tape_image, value) != 0) {
-                    fclose(fp);
-                    return -1;
-                }
-            }
-        }
+    if ((size_t)required < sizeof stack_buffer) {
+        monitor_console_write(stack_buffer, (size_t)required);
+        return;
     }
 
-    fclose(fp);
-    current_device[0] = '\0';
-    return 0;
+    size_t heap_size = (size_t)required + 1u;
+    char *heap_buffer = (char *)malloc(heap_size);
+    if (!heap_buffer) {
+        return;
+    }
+
+    va_list second_copy;
+    va_copy(second_copy, args);
+    vsnprintf(heap_buffer, heap_size, fmt, second_copy);
+    va_end(second_copy);
+    monitor_console_write(heap_buffer, (size_t)required);
+    free(heap_buffer);
 }
+
+static void monitor_console_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    monitor_console_vprintf(fmt, args);
+    va_end(args);
+    monitor_platform_console_flush();
+}
+
+static void monitor_console_puts(const char *text) {
+    if (text) {
+        monitor_console_write(text, strlen(text));
+    }
+    monitor_platform_console_putc('\n');
+    monitor_platform_console_flush();
+}
+
 
 static void show_devices(const struct monitor_config *config,
                          bool config_loaded,
@@ -248,28 +113,30 @@ static void show_devices(const struct monitor_config *config,
     const char *paper_tape_label =
         paper_tape_device ? pdp8_paper_tape_device_label(paper_tape_device) : NULL;
 
-    printf("Configuration source: %s\n", config_loaded ? "pdp8.config" : "built-in defaults");
+    monitor_console_printf("Configuration source: %s\n",
+                           config_loaded ? "pdp8.config" : "built-in defaults");
 
-    puts("Devices:");
-    printf("  KL8E console\n");
-    printf("    keyboard IOT     : %s\n", keyboard_iot);
-    printf("    teleprinter IOT  : %s\n", teleprinter_iot);
-    printf("    keyboard input   : %s\n", keyboard_input);
-    printf("    teleprinter output: %s\n", teleprinter_output);
+    monitor_console_puts("Devices:");
+    monitor_console_puts("  KL8E console");
+    monitor_console_printf("    keyboard IOT     : %s\n", keyboard_iot);
+    monitor_console_printf("    teleprinter IOT  : %s\n", teleprinter_iot);
+    monitor_console_printf("    keyboard input   : %s\n", keyboard_input);
+    monitor_console_printf("    teleprinter output: %s\n", teleprinter_output);
 
-    printf("  Line printer\n");
-    printf("    IOT              : %s\n", line_printer_iot);
-    printf("    output           : %s\n", line_printer_output);
-    printf("    column limit     : %d\n", line_printer_columns);
+    monitor_console_puts("  Line printer");
+    monitor_console_printf("    IOT              : %s\n", line_printer_iot);
+    monitor_console_printf("    output           : %s\n", line_printer_output);
+    monitor_console_printf("    column limit     : %d\n", line_printer_columns);
 
-    printf("  Paper tape\n");
-    printf("    IOT              : %s\n", paper_tape_iot);
+    monitor_console_puts("  Paper tape");
+    monitor_console_printf("    IOT              : %s\n", paper_tape_iot);
     if (paper_tape_device) {
-        printf("    image            : %s\n", paper_tape_image);
-        printf("    label            : %s\n", paper_tape_label ? paper_tape_label : "(none)");
+        monitor_console_printf("    image            : %s\n", paper_tape_image);
+        monitor_console_printf("    label            : %s\n",
+                               paper_tape_label ? paper_tape_label : "(none)");
     } else {
-        printf("    image            : %s\n", paper_tape_image);
-        printf("    status           : (not attached)\n");
+        monitor_console_printf("    image            : %s\n", paper_tape_image);
+        monitor_console_puts("    status           : (not attached)");
     }
 }
 
@@ -318,14 +185,14 @@ static int load_srec_image(pdp8_t *cpu,
 
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        fprintf(stderr, "Unable to open '%s' for reading: %s\n", path, strerror(errno));
+        monitor_console_printf("Unable to open '%s' for reading: %s\n", path, strerror(errno));
         return -1;
     }
 
     uint8_t *byte_data = (uint8_t *)calloc(memory_bytes, sizeof(uint8_t));
     bool *byte_present = (bool *)calloc(memory_bytes, sizeof(bool));
     if (!byte_data || !byte_present) {
-        fprintf(stderr, "Unable to allocate buffer for '%s'.\n", path);
+        monitor_console_printf("Unable to allocate buffer for '%s'.\n", path);
         free(byte_data);
         free(byte_present);
         fclose(fp);
@@ -366,7 +233,7 @@ static int load_srec_image(pdp8_t *cpu,
             const size_t addr_bytes = addr_digits / 2u;
 
             if (len < 4u + addr_digits + 2u) {
-                fprintf(stderr, "Malformed S-record line (too short): %s\n", cursor);
+                monitor_console_printf("Malformed S-record line (too short): %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -377,7 +244,7 @@ static int load_srec_image(pdp8_t *cpu,
             char *endptr = NULL;
             unsigned long count = strtoul(count_str, &endptr, 16);
             if (!endptr || *endptr != '\0') {
-                fprintf(stderr, "Malformed byte count in line: %s\n", cursor);
+                monitor_console_printf("Malformed byte count in line: %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -390,7 +257,7 @@ static int load_srec_image(pdp8_t *cpu,
             endptr = NULL;
             unsigned long base_address = strtoul(addr_buf, &endptr, 16);
             if (!endptr || *endptr != '\0') {
-                fprintf(stderr, "Malformed address in line: %s\n", cursor);
+                monitor_console_printf("Malformed address in line: %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -399,7 +266,7 @@ static int load_srec_image(pdp8_t *cpu,
 
             const size_t checksum_offset = len - 2u;
             if (checksum_offset < 4u + addr_digits) {
-                fprintf(stderr, "Malformed data section in line: %s\n", cursor);
+                monitor_console_printf("Malformed data section in line: %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -409,7 +276,7 @@ static int load_srec_image(pdp8_t *cpu,
             const char *data_ptr = cursor + 4 + addr_digits;
             const size_t data_hex_len = checksum_offset - (size_t)(data_ptr - cursor);
             if (data_hex_len % 2u != 0) {
-                fprintf(stderr, "Odd data length in line: %s\n", cursor);
+                monitor_console_printf("Odd data length in line: %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -418,7 +285,7 @@ static int load_srec_image(pdp8_t *cpu,
 
             const size_t data_bytes = data_hex_len / 2u;
             if (count != data_bytes + addr_bytes + 1u) {
-                fprintf(stderr, "Count mismatch for line: %s\n", cursor);
+                monitor_console_printf("Count mismatch for line: %s\n", cursor);
                 free(byte_data);
                 free(byte_present);
                 fclose(fp);
@@ -430,7 +297,7 @@ static int load_srec_image(pdp8_t *cpu,
                 endptr = NULL;
                 unsigned long value = strtoul(byte_buf, &endptr, 16);
                 if (!endptr || *endptr != '\0' || value > 0xFFul) {
-                    fprintf(stderr, "Malformed data byte in line: %s\n", cursor);
+                    monitor_console_printf("Malformed data byte in line: %s\n", cursor);
                     free(byte_data);
                     free(byte_present);
                     fclose(fp);
@@ -439,10 +306,10 @@ static int load_srec_image(pdp8_t *cpu,
 
                 const size_t absolute = base_address + i;
                 if (absolute >= memory_bytes) {
-                    fprintf(stderr,
-                            "Warning: S-record byte address 0x%lX exceeds memory (max 0x%llX). Skipping.\n",
-                            base_address + i,
-                            memory_bytes ? (unsigned long long)(memory_bytes - 1u) : 0ull);
+                    monitor_console_printf(
+                        "Warning: S-record byte address 0x%lX exceeds memory (max 0x%llX). Skipping.\n",
+                        base_address + i,
+                        memory_bytes ? (unsigned long long)(memory_bytes - 1u) : 0ull);
                     continue;
                 }
 
@@ -474,7 +341,7 @@ static int load_srec_image(pdp8_t *cpu,
     fp = NULL;
 
     if (!have_data) {
-        fprintf(stderr, "No data records found in '%s'.\n", path);
+        monitor_console_printf("No data records found in '%s'.\n", path);
         free(byte_data);
         free(byte_present);
         return -1;
@@ -494,7 +361,7 @@ static int load_srec_image(pdp8_t *cpu,
             const uint16_t value =
                 ((uint16_t)(byte_data[hi_index] & 0x0Fu) << 8) | (uint16_t)byte_data[lo_index];
             if (pdp8_api_write_mem(cpu, (uint16_t)word, value & 0x0FFFu) != 0) {
-                fprintf(stderr, "Failed to write memory at %04zo.\n", word);
+                monitor_console_printf("Failed to write memory at %04zo.\n", word);
                 free(byte_data);
                 free(byte_present);
                 return -1;
@@ -507,7 +374,8 @@ static int load_srec_image(pdp8_t *cpu,
     }
 
     if (written_words == 0) {
-        fprintf(stderr, "Parsed data from '%s' but no complete words were written.\n", path);
+        monitor_console_printf("Parsed data from '%s' but no complete words were written.\n",
+                               path);
         free(byte_data);
         free(byte_present);
         return -1;
@@ -536,9 +404,9 @@ static int load_srec_image(pdp8_t *cpu,
     }
 
     if (encountered_partial) {
-        fprintf(stderr,
-                "Warning: Incomplete word(s) encountered while reading '%s'; skipped those entries.\n",
-                path);
+        monitor_console_printf(
+            "Warning: Incomplete word(s) encountered while reading '%s'; skipped those entries.\n",
+            path);
     }
 
     free(byte_data);
@@ -546,77 +414,528 @@ static int load_srec_image(pdp8_t *cpu,
     return 0;
 }
 
-static void print_help(void) {
-    puts("Commands:");
-    puts("  mem <addr> [count]         Dump memory words (octal).");
-    puts("  dep <addr> <w0> [w1 ...]   Deposit consecutive words starting at addr.");
-    puts("  run <addr> <cycles>        Set PC to addr then execute cycles.");
-    puts("  c [cycles]                 Continue execution for cycles (default 1).");
-    puts("  regs                       Show PC, AC, link, switch register.");
-    puts("  save <file>                Write RAM image to file.");
-    puts("  restore <file>             Load RAM image from file.");
-    puts("  read <file>                Load Motorola S-record image and apply start address.");
-    puts("  reset                      Clear state and reload board ROM.");
-    puts("  show devices               List attached peripherals and configuration.");
-    puts("  help                       Show this help.");
-    puts("  quit                       Exit monitor.");
-    puts("Notes: numbers default to octal; prefix with '#' for decimal or 0x for hex.");
+enum monitor_command_status {
+    MONITOR_COMMAND_OK = 0,
+    MONITOR_COMMAND_ERROR = -1,
+    MONITOR_COMMAND_EXIT = 1
+};
+
+struct monitor_command;
+
+typedef enum monitor_command_status (*monitor_command_handler)(struct monitor_runtime *runtime,
+                                                               char **state);
+
+static int run_with_console(struct monitor_runtime *runtime, size_t cycles);
+
+struct monitor_command {
+    const char *name;
+    monitor_command_handler handler;
+    const char *usage;
+    const char *description;
+    bool show_in_help;
+};
+
+static char *command_next_token(char **state) {
+    if (!state) {
+        return NULL;
+    }
+    return strtok_r(NULL, " \t", state);
 }
 
-static void pump_console_input(pdp8_kl8e_console_t *console, FILE *stream) {
-    if (!console || !stream) {
-        return;
+static enum monitor_command_status command_help(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_quit(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_regs(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_mem(struct monitor_runtime *runtime,
+                                               char **state);
+static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
+                                               char **state);
+static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
+                                                    char **state);
+static enum monitor_command_status command_run(struct monitor_runtime *runtime,
+                                               char **state);
+static enum monitor_command_status command_save(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_restore(struct monitor_runtime *runtime,
+                                                   char **state);
+static enum monitor_command_status command_read(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_show(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
+                                                 char **state);
+
+static const struct monitor_command monitor_commands[] = {
+    {"help", command_help, "help [command]", "Show command list or detailed help.", true},
+    {"quit", command_quit, "quit", "Exit the monitor.", true},
+    {"exit", command_quit, "exit", "Exit the monitor (alias of quit).", false},
+    {"regs", command_regs, "regs", "Show registers and halt state.", true},
+    {"mem", command_mem, "mem <addr> [count]", "Dump memory words (octal).", true},
+    {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
+    {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
+    {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
+    {"save", command_save, "save <file>", "Write RAM image to a file.", true},
+    {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
+    {"read", command_read, "read <file>", "Load Motorola S-record image.", true},
+    {"show", command_show, "show devices", "Display configured peripherals.", true},
+    {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
+};
+
+static const struct monitor_command *find_command(const char *name) {
+    if (!name) {
+        return NULL;
     }
-
-    while (true) {
-        errno = 0;
-        int ch = fgetc(stream);
-        if (ch == EOF) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                clearerr(stream);
-            } else if (feof(stream)) {
-                clearerr(stream);
-            }
-            break;
+    size_t count = sizeof(monitor_commands) / sizeof(monitor_commands[0]);
+    for (size_t i = 0; i < count; ++i) {
+        if (strcmp(monitor_commands[i].name, name) == 0) {
+            return &monitor_commands[i];
         }
-
-        if (ch == '\n') {
-            ch = '\r';
-        }
-
-        (void)pdp8_kl8e_console_queue_input(console, (uint8_t)(ch & 0x7F));
     }
+    return NULL;
+}
+
+static void print_help_listing(void) {
+    monitor_console_puts("Commands:");
+    size_t count = sizeof(monitor_commands) / sizeof(monitor_commands[0]);
+    for (size_t i = 0; i < count; ++i) {
+        const struct monitor_command *cmd = &monitor_commands[i];
+        if (!cmd->show_in_help) {
+            continue;
+        }
+        monitor_console_printf("  %-27s %s\n",
+                               cmd->usage ? cmd->usage : cmd->name,
+                               cmd->description ? cmd->description : "");
+    }
+    monitor_console_puts("Notes: numbers default to octal; prefix with '#' for decimal or 0x for hex.");
 }
 
 #define MONITOR_RUN_SLICE 2000u
 
-static int run_with_console(pdp8_t *cpu, pdp8_kl8e_console_t *console, size_t cycles, FILE *input_stream) {
-    if (!cpu) {
-        return -1;
+static void monitor_runtime_init(struct monitor_runtime *runtime) {
+    if (!runtime) {
+        return;
+    }
+    memset(runtime, 0, sizeof(*runtime));
+    monitor_config_init(&runtime->config);
+    runtime->config_loaded = false;
+}
+
+static enum monitor_command_status command_help(struct monitor_runtime *runtime,
+                                                char **state) {
+    (void)runtime;
+    char *topic = command_next_token(state);
+    if (!topic) {
+        print_help_listing();
+        return MONITOR_COMMAND_OK;
     }
 
-    int input_fd = -1;
-    int original_flags = -1;
-    if (console && input_stream) {
-        input_fd = fileno(input_stream);
-        if (input_fd >= 0) {
-            original_flags = fcntl(input_fd, F_GETFL, 0);
-            if (original_flags != -1) {
-                if (fcntl(input_fd, F_SETFL, original_flags | O_NONBLOCK) == -1) {
-                    original_flags = -1;
-                }
-            }
+    const struct monitor_command *cmd = find_command(topic);
+    if (!cmd) {
+        monitor_console_printf("Unknown command '%s'. Type 'help' for a list.\n", topic);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    const char *usage = cmd->usage ? cmd->usage : cmd->name;
+    const char *desc = cmd->description ? cmd->description : "";
+    monitor_console_printf("%s\n", usage);
+    if (desc[0] != '\0') {
+        monitor_console_printf("  %s\n", desc);
+    }
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_quit(struct monitor_runtime *runtime,
+                                                char **state) {
+    (void)runtime;
+    (void)state;
+    return MONITOR_COMMAND_EXIT;
+}
+
+static enum monitor_command_status command_regs(struct monitor_runtime *runtime,
+                                                char **state) {
+    (void)state;
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t pc = pdp8_api_get_pc(runtime->cpu);
+    uint16_t ac = pdp8_api_get_ac(runtime->cpu);
+    uint8_t link = pdp8_api_get_link(runtime->cpu);
+    uint16_t sw = pdp8_api_get_switch_register(runtime->cpu);
+    bool halted = pdp8_api_is_halted(runtime->cpu) != 0;
+    monitor_console_printf("PC=%04o AC=%04o LINK=%o SW=%04o HALT=%s\n",
+                           pc & 0x0FFFu,
+                           ac & 0x0FFFu,
+                           link & 0x1u,
+                           sw & 0x0FFFu,
+                           halted ? "yes" : "no");
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_mem(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *addr_tok = command_next_token(state);
+    if (!addr_tok) {
+        monitor_console_puts("mem requires address.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long addr_val = 0;
+    if (parse_number(addr_tok, &addr_val) != 0 || addr_val < 0) {
+        monitor_console_printf("Invalid address '%s'.\n", addr_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *count_tok = command_next_token(state);
+    long count_val = 8;
+    if (count_tok) {
+        if (parse_number(count_tok, &count_val) != 0 || count_val <= 0) {
+            monitor_console_printf("Invalid count '%s'.\n", count_tok);
+            return MONITOR_COMMAND_ERROR;
         }
+    }
+
+    size_t address = (size_t)addr_val;
+    for (long i = 0; i < count_val; ++i) {
+        size_t current = (address + (size_t)i) % runtime->memory_words;
+        uint16_t word = pdp8_api_read_mem(runtime->cpu, (uint16_t)current);
+
+        if (i % 8 == 0) {
+            if (i > 0) {
+                monitor_platform_console_putc('\n');
+            }
+            monitor_console_printf("%04zo:", current);
+        }
+
+        monitor_console_printf(" %04o", word & 0x0FFFu);
+    }
+    if (count_val > 0) {
+        monitor_platform_console_putc('\n');
+        monitor_platform_console_flush();
+    }
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *addr_tok = command_next_token(state);
+    if (!addr_tok) {
+        monitor_console_puts("dep requires address.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long addr_val = 0;
+    if (parse_number(addr_tok, &addr_val) != 0 || addr_val < 0) {
+        monitor_console_printf("Invalid address '%s'.\n", addr_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t loaded = 0;
+    for (char *word_tok = command_next_token(state); word_tok != NULL;
+         word_tok = command_next_token(state)) {
+        long word_val = 0;
+        if (parse_number(word_tok, &word_val) != 0 || word_val < 0 || word_val > 0x0FFF) {
+            monitor_console_printf("Invalid word '%s'.\n", word_tok);
+            loaded = 0;
+            break;
+        }
+
+        size_t current = ((size_t)addr_val + loaded) % runtime->memory_words;
+        if (pdp8_api_write_mem(runtime->cpu, (uint16_t)current, (uint16_t)word_val) != 0) {
+            monitor_console_printf("Failed to write memory at %04zo.\n", current);
+            loaded = 0;
+            break;
+        }
+        ++loaded;
+    }
+
+    if (loaded > 0) {
+        monitor_console_printf("Deposited %zu word(s) starting at %04zo.\n",
+                               loaded,
+                               (size_t)addr_val % runtime->memory_words);
+    }
+    return loaded > 0 ? MONITOR_COMMAND_OK : MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
+                                                    char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *cycles_tok = command_next_token(state);
+    long cycles_val = 1;
+    if (cycles_tok) {
+        if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+            monitor_console_printf("Invalid cycle count '%s'.\n", cycles_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+    }
+
+    pdp8_api_clear_halt(runtime->cpu);
+    size_t cycles = (size_t)cycles_val;
+    int executed = run_with_console(runtime, cycles);
+    if (executed < 0) {
+        monitor_console_puts("Continue failed.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_console_printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
+                           executed,
+                           pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
+                           pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_run(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *start_tok = command_next_token(state);
+    char *cycles_tok = command_next_token(state);
+    if (!start_tok || !cycles_tok) {
+        monitor_console_puts("run requires start address and cycle count.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long start_val = 0;
+    if (parse_number(start_tok, &start_val) != 0 || start_val < 0) {
+        monitor_console_printf("Invalid start address '%s'.\n", start_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+    if ((size_t)start_val >= runtime->memory_words) {
+        monitor_console_printf("Start address %04lo exceeds memory size.\n", start_val);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long cycles_val = 0;
+    if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+        monitor_console_printf("Invalid cycle count '%s'.\n", cycles_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    pdp8_api_clear_halt(runtime->cpu);
+    pdp8_api_set_pc(runtime->cpu, (uint16_t)(start_val & 0x0FFFu));
+    size_t cycles = (size_t)cycles_val;
+    int executed = run_with_console(runtime, cycles);
+    if (executed < 0) {
+        monitor_console_puts("Run failed.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_console_printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
+                           executed,
+                           pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
+                           pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_save(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        monitor_console_puts("save requires file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        monitor_console_printf("Unable to open '%s' for writing: %s\n", path, strerror(errno));
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t written = 0;
+    for (size_t addr = 0; addr < runtime->memory_words; ++addr) {
+        uint16_t word = pdp8_api_read_mem(runtime->cpu, (uint16_t)addr);
+        if (fwrite(&word, sizeof word, 1, fp) != 1) {
+            monitor_console_printf("Write failed at address %04zo: %s\n", addr, strerror(errno));
+            fclose(fp);
+            return MONITOR_COMMAND_ERROR;
+        }
+        ++written;
+    }
+
+    fclose(fp);
+    monitor_console_printf("Saved %zu word(s) to %s.\n", written, path);
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_restore(struct monitor_runtime *runtime,
+                                                   char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        monitor_console_puts("restore requires file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        monitor_console_printf("Unable to open '%s' for reading: %s\n", path, strerror(errno));
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t restored = 0;
+    uint16_t word = 0;
+    while (restored < runtime->memory_words && fread(&word, sizeof word, 1, fp) == 1) {
+        pdp8_api_write_mem(runtime->cpu, (uint16_t)restored, word);
+        ++restored;
+    }
+
+    if (!feof(fp)) {
+        monitor_console_printf("Read error while restoring: %s\n", strerror(errno));
+        fclose(fp);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    fclose(fp);
+    monitor_console_printf("Restored %zu word(s) from %s.\n", restored, path);
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_read(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        monitor_console_puts("read requires file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t words_loaded = 0;
+    size_t highest_address = 0;
+    uint16_t start_address = 0;
+    bool start_valid = false;
+
+    if (load_srec_image(runtime->cpu,
+                        path,
+                        runtime->memory_words,
+                        &words_loaded,
+                        &highest_address,
+                        &start_address,
+                        &start_valid) != 0) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_console_printf("Loaded %zu word(s) from %s", words_loaded, path);
+    if (words_loaded > 0) {
+        monitor_console_printf(" (last %04zo)", highest_address);
+    }
+    monitor_console_puts(".");
+
+    if (start_valid) {
+        pdp8_api_set_pc(runtime->cpu, start_address & 0x0FFFu);
+        monitor_console_printf("Start address %04o set as PC.\n", start_address & 0x0FFFu);
+    }
+
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_show(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *topic = command_next_token(state);
+    if (!topic) {
+        monitor_console_puts("show requires a subject (e.g. 'show devices').");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (strcmp(topic, "devices") == 0) {
+        show_devices(&runtime->config, runtime->config_loaded, runtime->paper_tape);
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_console_printf("Unknown subject for show: '%s'.\n", topic);
+    return MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
+                                                 char **state) {
+    (void)state;
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    pdp8_api_reset(runtime->cpu);
+    monitor_console_puts("CPU reset.");
+    return MONITOR_COMMAND_OK;
+}
+
+static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
+    if (!runtime) {
+        return;
+    }
+    if (runtime->paper_tape) {
+        pdp8_paper_tape_device_destroy(runtime->paper_tape);
+        runtime->paper_tape = NULL;
+    }
+    if (runtime->printer) {
+        pdp8_line_printer_destroy(runtime->printer);
+        runtime->printer = NULL;
+    }
+    if (runtime->console) {
+        if (g_console == runtime->console) {
+            g_console = NULL;
+        }
+        pdp8_kl8e_console_destroy(runtime->console);
+        runtime->console = NULL;
+    }
+    if (runtime->cpu) {
+        pdp8_api_destroy(runtime->cpu);
+        runtime->cpu = NULL;
+    }
+    runtime->memory_words = 0u;
+}
+
+static void service_platform_keyboard(pdp8_kl8e_console_t *console) {
+    if (!console) {
+        return;
+    }
+
+    uint8_t ch = 0;
+    while (monitor_platform_poll_keyboard(&ch)) {
+        (void)pdp8_kl8e_console_queue_input(console, ch);
+    }
+}
+
+static int run_with_console(struct monitor_runtime *runtime, size_t cycles) {
+    if (!runtime || !runtime->cpu) {
+        return -1;
     }
 
     size_t remaining = cycles;
     int total_executed = 0;
 
     while (remaining > 0u) {
-        pump_console_input(console, input_stream);
+        service_platform_keyboard(runtime->console);
 
         size_t request = remaining > MONITOR_RUN_SLICE ? MONITOR_RUN_SLICE : remaining;
-        int executed = pdp8_api_run(cpu, request);
+        int executed = pdp8_api_run(runtime->cpu, request);
         if (executed <= 0) {
             if (executed < 0) {
                 total_executed = executed;
@@ -627,467 +946,167 @@ static int run_with_console(pdp8_t *cpu, pdp8_kl8e_console_t *console, size_t cy
         total_executed += executed;
         remaining -= (size_t)executed;
 
-        if ((size_t)executed < request || pdp8_api_is_halted(cpu)) {
+        if ((size_t)executed < request || pdp8_api_is_halted(runtime->cpu)) {
             break;
         }
+
+        monitor_platform_idle();
     }
 
-    pump_console_input(console, input_stream);
-
-    if (input_fd >= 0 && original_flags != -1) {
-        fcntl(input_fd, F_SETFL, original_flags);
-    }
-
+    service_platform_keyboard(runtime->console);
     return total_executed;
 }
 
-int main(void) {
-    int exit_code = EXIT_SUCCESS;
-    const pdp8_board_spec *board = pdp8_board_host_simulator();
-    if (!board) {
-        fprintf(stderr, "Unable to fetch host simulator board spec.\n");
-        return EXIT_FAILURE;
+static bool monitor_runtime_create(struct monitor_runtime *runtime,
+                                   const pdp8_board_spec *board) {
+    if (!runtime || !board) {
+        return false;
     }
 
-    pdp8_t *cpu = pdp8_api_create_for_board(board);
-    if (!cpu) {
-        fprintf(stderr, "Unable to create PDP-8 instance.\n");
-        return EXIT_FAILURE;
+    runtime->memory_words = board->memory_words ? board->memory_words : 4096u;
+
+    runtime->cpu = pdp8_api_create_for_board(board);
+    if (!runtime->cpu) {
+        return false;
     }
 
-    struct monitor_config config;
-    bool config_loaded = false;
-    int config_status = monitor_config_load("pdp8.config", &config);
-    if (config_status == 0) {
-        config_loaded = true;
-    } else {
-        monitor_config_init(&config);
-        if (config_status < 0) {
-            fprintf(stderr, "Warning: failed to read pdp8.config (%s). Using built-in defaults.\n",
-                    strerror(errno));
-        }
+    runtime->console = monitor_platform_create_console();
+    if (!runtime->console) {
+        monitor_runtime_teardown(runtime);
+        return false;
     }
 
-    FILE *console_input_stream = stdin;
-    FILE *console_output_stream = stdout;
-    bool close_console_input = false;
-    bool close_console_output = false;
-
-    if (config_loaded && config.kl8e_present) {
-        if (config.kl8e_keyboard_input && strcmp(config.kl8e_keyboard_input, "stdin") != 0) {
-            FILE *custom = fopen(config.kl8e_keyboard_input, "r");
-            if (!custom) {
-                fprintf(stderr,
-                        "Warning: unable to open KL8E keyboard input '%s': %s. Falling back to stdin.\n",
-                        config.kl8e_keyboard_input, strerror(errno));
-            } else {
-                console_input_stream = custom;
-                close_console_input = true;
-            }
-        }
-
-        if (config.kl8e_teleprinter_output &&
-            strcmp(config.kl8e_teleprinter_output, "stdout") != 0) {
-            FILE *custom = NULL;
-            if (strcmp(config.kl8e_teleprinter_output, "stderr") == 0) {
-                custom = stderr;
-            } else {
-                custom = fopen(config.kl8e_teleprinter_output, "a");
-                if (!custom) {
-                    fprintf(stderr,
-                            "Warning: unable to open KL8E teleprinter output '%s': %s. "
-                            "Falling back to stdout.\n",
-                            config.kl8e_teleprinter_output, strerror(errno));
-                } else {
-                    close_console_output = true;
-                }
-            }
-            if (custom) {
-                console_output_stream = custom;
-            }
-        }
+    if (pdp8_kl8e_console_attach(runtime->cpu, runtime->console) != 0) {
+        monitor_runtime_teardown(runtime);
+        return false;
     }
 
-    pdp8_kl8e_console_t *console = pdp8_kl8e_console_create(console_input_stream, console_output_stream);
-    if (!console) {
-        fprintf(stderr, "Unable to create KL8E console.\n");
-        if (close_console_input && console_input_stream) {
-            fclose(console_input_stream);
-        }
-        if (close_console_output && console_output_stream && console_output_stream != console_input_stream) {
-            fclose(console_output_stream);
-        }
-        monitor_config_clear(&config);
-        pdp8_api_destroy(cpu);
-        return EXIT_FAILURE;
+    g_console = runtime->console;
+
+    runtime->printer = monitor_platform_create_printer();
+    if (!runtime->printer) {
+        monitor_runtime_teardown(runtime);
+        return false;
     }
 
-    if (pdp8_kl8e_console_attach(cpu, console) != 0) {
-        fprintf(stderr, "Unable to attach KL8E console.\n");
-        pdp8_kl8e_console_destroy(console);
-        if (close_console_input && console_input_stream) {
-            fclose(console_input_stream);
-        }
-        if (close_console_output && console_output_stream && console_output_stream != console_input_stream) {
-            fclose(console_output_stream);
-        }
-        monitor_config_clear(&config);
-        pdp8_api_destroy(cpu);
-        return EXIT_FAILURE;
+    if (pdp8_line_printer_attach(runtime->cpu, runtime->printer) != 0) {
+        monitor_runtime_teardown(runtime);
+        return false;
     }
 
-    FILE *printer_output_stream = stdout;
-    bool close_printer_output = false;
-    int printer_column_limit = 132;
-
-    if (config_loaded && config.line_printer_present) {
-        printer_column_limit = config.line_printer_column_limit > 0
-                                   ? config.line_printer_column_limit
-                                   : 132;
-        if (config.line_printer_output && strcmp(config.line_printer_output, "stdout") != 0) {
-            FILE *custom = NULL;
-            if (strcmp(config.line_printer_output, "stderr") == 0) {
-                custom = stderr;
-            } else {
-                custom = fopen(config.line_printer_output, "a");
-                if (!custom) {
-                    fprintf(stderr,
-                            "Warning: unable to open line printer output '%s': %s. "
-                            "Falling back to stdout.\n",
-                            config.line_printer_output, strerror(errno));
-                } else {
-                    close_printer_output = true;
-                }
-            }
-            if (custom) {
-                printer_output_stream = custom;
-            }
-        }
+    int printer_columns = 132;
+    if (runtime->config_loaded && runtime->config.line_printer_present &&
+        runtime->config.line_printer_column_limit > 0) {
+        printer_columns = runtime->config.line_printer_column_limit;
     }
+    pdp8_line_printer_set_column_limit(runtime->printer, (uint16_t)printer_columns);
 
-    pdp8_line_printer_t *printer = pdp8_line_printer_create(printer_output_stream);
-    if (!printer) {
-        fprintf(stderr, "Unable to create line printer peripheral.\n");
-        pdp8_kl8e_console_destroy(console);
-        if (close_console_input && console_input_stream) {
-            fclose(console_input_stream);
-        }
-        if (close_console_output && console_output_stream && console_output_stream != console_input_stream) {
-            fclose(console_output_stream);
-        }
-        monitor_config_clear(&config);
-        pdp8_api_destroy(cpu);
-        return EXIT_FAILURE;
-    }
-
-    if (pdp8_line_printer_attach(cpu, printer) != 0) {
-        fprintf(stderr, "Unable to attach line printer peripheral.\n");
-        pdp8_line_printer_destroy(printer);
-        pdp8_kl8e_console_destroy(console);
-        if (close_console_input && console_input_stream) {
-            fclose(console_input_stream);
-        }
-        if (close_console_output && console_output_stream && console_output_stream != console_input_stream) {
-            fclose(console_output_stream);
-        }
-        if (close_printer_output && printer_output_stream && printer_output_stream != console_output_stream &&
-            printer_output_stream != console_input_stream) {
-            fclose(printer_output_stream);
-        }
-        monitor_config_clear(&config);
-        pdp8_api_destroy(cpu);
-        return EXIT_FAILURE;
-    }
-
-    pdp8_line_printer_set_column_limit(printer, (uint16_t)printer_column_limit);
-
-    pdp8_paper_tape_device_t *paper_tape_device = NULL;
-    if (config_loaded && config.paper_tape_present) {
-        if (config.paper_tape_image && *config.paper_tape_image) {
-            paper_tape_device = pdp8_paper_tape_device_create();
-            if (!paper_tape_device) {
-                fprintf(stderr, "Warning: unable to create paper tape device.\n");
-            } else if (pdp8_paper_tape_device_load(paper_tape_device, config.paper_tape_image) != 0) {
-                fprintf(stderr, "Warning: unable to load paper tape image '%s'.\n",
-                        config.paper_tape_image);
-                pdp8_paper_tape_device_destroy(paper_tape_device);
-                paper_tape_device = NULL;
-            } else if (pdp8_paper_tape_device_attach(cpu, paper_tape_device) != 0) {
-                fprintf(stderr, "Warning: unable to attach paper tape device (IOT 667x).\n");
-                pdp8_paper_tape_device_destroy(paper_tape_device);
-                paper_tape_device = NULL;
+    if (runtime->config_loaded && runtime->config.paper_tape_present) {
+        if (runtime->config.paper_tape_image && *runtime->config.paper_tape_image) {
+            runtime->paper_tape = pdp8_paper_tape_device_create();
+            if (!runtime->paper_tape) {
+                monitor_console_puts("Warning: unable to create paper tape device.");
+            } else if (pdp8_paper_tape_device_load(runtime->paper_tape,
+                                                   runtime->config.paper_tape_image) != 0) {
+                monitor_console_printf("Warning: unable to load paper tape image '%s'.\n",
+                                       runtime->config.paper_tape_image);
+                pdp8_paper_tape_device_destroy(runtime->paper_tape);
+                runtime->paper_tape = NULL;
+            } else if (pdp8_paper_tape_device_attach(runtime->cpu, runtime->paper_tape) != 0) {
+                monitor_console_puts("Warning: unable to attach paper tape device (IOT 667x).");
+                pdp8_paper_tape_device_destroy(runtime->paper_tape);
+                runtime->paper_tape = NULL;
             }
         } else {
-            fprintf(stderr,
-                    "Warning: paper_tape device requested but no image path provided in pdp8.config.\n");
+            monitor_console_puts(
+                "Warning: paper_tape device requested but no image path provided in pdp8.config.");
         }
     }
 
-    const size_t memory_words = board->memory_words ? board->memory_words : 4096u;
+    return true;
+}
+
+static int monitor_runtime_loop(struct monitor_runtime *runtime) {
+    if (!runtime || !runtime->cpu) {
+        return EXIT_FAILURE;
+    }
+
     char line[512];
+    monitor_console_puts("PDP-8 Monitor. Type 'help' for commands.");
 
-    puts("PDP-8 Monitor. Type 'help' for commands.");
     while (true) {
-        fputs("pdp8> ", stdout);
-        fflush(stdout);
+        monitor_console_printf("pdp8> ");
+        monitor_platform_console_flush();
 
-        if (!fgets(line, sizeof line, stdin)) {
-            puts("");
-            break;
+        if (!monitor_platform_readline(line, sizeof line)) {
+            monitor_console_puts("");
+            return EXIT_SUCCESS;
         }
 
         line[strcspn(line, "\r\n")] = '\0';
 
-        char *cmd = strtok(line, " \t");
-        if (!cmd) {
+        char *saveptr = NULL;
+        char *cmd_name = strtok_r(line, " \t", &saveptr);
+        if (!cmd_name) {
             continue;
         }
 
-        if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
-            break;
-        } else if (strcmp(cmd, "help") == 0) {
-            print_help();
-        } else if (strcmp(cmd, "regs") == 0) {
-            uint16_t pc = pdp8_api_get_pc(cpu);
-            uint16_t ac = pdp8_api_get_ac(cpu);
-            uint8_t link = pdp8_api_get_link(cpu);
-            uint16_t sw = pdp8_api_get_switch_register(cpu);
-            bool halted = pdp8_api_is_halted(cpu) != 0;
-            printf("PC=%04o AC=%04o LINK=%o SW=%04o HALT=%s\n",
-                   pc & 0x0FFFu, ac & 0x0FFFu, link & 0x1u, sw & 0x0FFFu, halted ? "yes" : "no");
-        } else if (strcmp(cmd, "mem") == 0) {
-            char *addr_tok = strtok(NULL, " \t");
-            if (!addr_tok) {
-                fprintf(stderr, "mem requires address.\n");
-                continue;
-            }
-            long addr_val = 0;
-            if (parse_number(addr_tok, &addr_val) != 0 || addr_val < 0) {
-                fprintf(stderr, "Invalid address '%s'.\n", addr_tok);
-                continue;
-            }
-            char *count_tok = strtok(NULL, " \t");
-            long count_val = 8;
-            if (count_tok) {
-                if (parse_number(count_tok, &count_val) != 0 || count_val <= 0) {
-                    fprintf(stderr, "Invalid count '%s'.\n", count_tok);
-                    continue;
-                }
-            }
+        const struct monitor_command *command = find_command(cmd_name);
+        if (!command) {
+            monitor_console_printf("Unknown command '%s'. Type 'help' for a list.\n", cmd_name);
+            continue;
+        }
 
-            size_t address = (size_t)addr_val;
-            for (long i = 0; i < count_val; ++i) {
-                size_t current = (address + (size_t)i) % memory_words;
-                uint16_t word = pdp8_api_read_mem(cpu, (uint16_t)current);
-
-                if (i % 8 == 0) {
-                    if (i > 0) {
-                        putchar('\n');
-                    }
-                    printf("%04zo:", current);
-                }
-
-                printf(" %04o", word & 0x0FFFu);
-            }
-            if (count_val > 0) {
-                putchar('\n');
-            }
-        } else if (strcmp(cmd, "dep") == 0) {
-            char *addr_tok = strtok(NULL, " \t");
-            if (!addr_tok) {
-                fprintf(stderr, "dep requires address.\n");
-                continue;
-            }
-            long addr_val = 0;
-            if (parse_number(addr_tok, &addr_val) != 0 || addr_val < 0) {
-                fprintf(stderr, "Invalid address '%s'.\n", addr_tok);
-                continue;
-            }
-
-            size_t loaded = 0;
-            char *word_tok = NULL;
-            while ((word_tok = strtok(NULL, " \t")) != NULL) {
-                long word_val = 0;
-                if (parse_number(word_tok, &word_val) != 0 || word_val < 0 || word_val > 0x0FFF) {
-                    fprintf(stderr, "Invalid word '%s'.\n", word_tok);
-                    loaded = 0;
-                    break;
-                }
-                size_t current = ((size_t)addr_val + loaded) % memory_words;
-                if (pdp8_api_write_mem(cpu, (uint16_t)current, (uint16_t)word_val) != 0) {
-                    fprintf(stderr, "Failed to write memory at %04zo.\n", current);
-                    loaded = 0;
-                    break;
-                }
-                ++loaded;
-            }
-
-            if (loaded > 0) {
-                printf("Deposited %zu word(s) starting at %04zo.\n", loaded, (size_t)addr_val % memory_words);
-            }
-        } else if (strcmp(cmd, "c") == 0) {
-            char *cycles_tok = strtok(NULL, " \t");
-            long cycles_val = 1;
-            if (cycles_tok) {
-                if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
-                    fprintf(stderr, "Invalid cycle count '%s'.\n", cycles_tok);
-                    continue;
-                }
-            }
-
-            pdp8_api_clear_halt(cpu);
-            size_t cycles = (size_t)cycles_val;
-            int executed = run_with_console(cpu, console, cycles, stdin);
-            if (executed < 0) {
-                fprintf(stderr, "Continue failed.\n");
-                continue;
-            }
-            printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
-                   executed, pdp8_api_get_pc(cpu) & 0x0FFFu,
-                   pdp8_api_is_halted(cpu) ? "yes" : "no");
-        } else if (strcmp(cmd, "run") == 0) {
-            char *start_tok = strtok(NULL, " \t");
-            char *cycles_tok = strtok(NULL, " \t");
-            if (!start_tok || !cycles_tok) {
-                fprintf(stderr, "run requires start address and cycle count.\n");
-                continue;
-            }
-
-            long start_val = 0;
-            if (parse_number(start_tok, &start_val) != 0 || start_val < 0) {
-                fprintf(stderr, "Invalid start address '%s'.\n", start_tok);
-                continue;
-            }
-            if ((size_t)start_val >= memory_words) {
-                fprintf(stderr, "Start address %04lo exceeds memory size.\n", start_val);
-                continue;
-            }
-
-            long cycles_val = 0;
-            if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
-                fprintf(stderr, "Invalid cycle count '%s'.\n", cycles_tok);
-                continue;
-            }
-
-            pdp8_api_clear_halt(cpu);
-            pdp8_api_set_pc(cpu, (uint16_t)(start_val & 0x0FFFu));
-            size_t cycles = (size_t)cycles_val;
-            int executed = run_with_console(cpu, console, cycles, stdin);
-            if (executed < 0) {
-                fprintf(stderr, "Run failed.\n");
-                continue;
-            }
-            printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
-                   executed, pdp8_api_get_pc(cpu) & 0x0FFFu,
-                   pdp8_api_is_halted(cpu) ? "yes" : "no");
-        } else if (strcmp(cmd, "save") == 0) {
-            char *path = strtok(NULL, " \t");
-            if (!path) {
-                fprintf(stderr, "save requires file path.\n");
-                continue;
-            }
-            FILE *fp = fopen(path, "wb");
-            if (!fp) {
-                fprintf(stderr, "Unable to open '%s' for writing: %s\n", path, strerror(errno));
-                continue;
-            }
-            size_t written = 0;
-            for (size_t addr = 0; addr < memory_words; ++addr) {
-                uint16_t word = pdp8_api_read_mem(cpu, (uint16_t)addr);
-                if (fwrite(&word, sizeof word, 1, fp) != 1) {
-                    fprintf(stderr, "Write failed at address %04zo: %s\n", addr, strerror(errno));
-                    break;
-                }
-                ++written;
-            }
-            fclose(fp);
-            printf("Saved %zu word(s) to %s.\n", written, path);
-        } else if (strcmp(cmd, "restore") == 0) {
-            char *path = strtok(NULL, " \t");
-            if (!path) {
-                fprintf(stderr, "restore requires file path.\n");
-                continue;
-            }
-            FILE *fp = fopen(path, "rb");
-            if (!fp) {
-                fprintf(stderr, "Unable to open '%s' for reading: %s\n", path, strerror(errno));
-                continue;
-            }
-            size_t restored = 0;
-            uint16_t word = 0;
-            while (restored < memory_words && fread(&word, sizeof word, 1, fp) == 1) {
-                pdp8_api_write_mem(cpu, (uint16_t)restored, word);
-                ++restored;
-            }
-            if (!feof(fp)) {
-                fprintf(stderr, "Read error while restoring: %s\n", strerror(errno));
-            }
-            fclose(fp);
-            printf("Restored %zu word(s) from %s.\n", restored, path);
-        } else if (strcmp(cmd, "read") == 0) {
-            char *path = strtok(NULL, " \t");
-            if (!path) {
-                fprintf(stderr, "read requires file path.\n");
-                continue;
-            }
-
-            size_t words_loaded = 0;
-            size_t highest_address = 0;
-            uint16_t start_address = 0;
-            bool start_valid = false;
-
-            if (load_srec_image(cpu, path, memory_words, &words_loaded, &highest_address,
-                                &start_address, &start_valid) != 0) {
-                continue;
-            }
-
-            printf("Loaded %zu word(s) from %s", words_loaded, path);
-            if (words_loaded > 0) {
-                printf(" (last %04zo)", highest_address);
-            }
-            puts(".");
-
-            if (start_valid) {
-                pdp8_api_set_pc(cpu, start_address & 0x0FFFu);
-                printf("Start address %04o set as PC.\n", start_address & 0x0FFFu);
-            }
-        } else if (strcmp(cmd, "show") == 0) {
-            char *topic = strtok(NULL, " \t");
-            if (!topic) {
-                fprintf(stderr, "show requires a subject (e.g. 'show devices').\n");
-                continue;
-            }
-            if (strcmp(topic, "devices") == 0) {
-                show_devices(&config, config_loaded, paper_tape_device);
-            } else {
-                fprintf(stderr, "Unknown subject for show: '%s'.\n", topic);
-            }
-        } else if (strcmp(cmd, "reset") == 0) {
-            pdp8_api_reset(cpu);
-            puts("CPU reset.");
-        } else {
-            fprintf(stderr, "Unknown command '%s'. Type 'help' for a list.\n", cmd);
+        enum monitor_command_status status = command->handler(runtime, &saveptr);
+        if (status == MONITOR_COMMAND_EXIT) {
+            return EXIT_SUCCESS;
         }
     }
 
-    if (paper_tape_device) {
-        pdp8_paper_tape_device_destroy(paper_tape_device);
+    return EXIT_SUCCESS;
+}
+
+int main(void) {
+    int exit_code = EXIT_SUCCESS;
+    struct monitor_runtime runtime;
+    monitor_runtime_init(&runtime);
+
+    const pdp8_board_spec *board = NULL;
+    bool config_loaded = false;
+    int config_status = 0;
+
+    if (monitor_platform_init(&runtime.config, &board, &config_loaded, &config_status) != 0 || !board) {
+        fprintf(stderr, "Unable to initialise monitor platform.\n");
+        exit_code = EXIT_FAILURE;
+        goto shutdown;
     }
-    pdp8_line_printer_destroy(printer);
-    pdp8_kl8e_console_destroy(console);
-    if (close_printer_output && printer_output_stream &&
-        printer_output_stream != stdout && printer_output_stream != stderr) {
-        fclose(printer_output_stream);
+
+    runtime.config_loaded = config_loaded;
+
+    if (config_status < 0) {
+        fprintf(stderr,
+                "Warning: failed to read pdp8.config (%s). Using built-in defaults.\n",
+                strerror(-config_status));
     }
-    if (close_console_output && console_output_stream &&
-        console_output_stream != stdout && console_output_stream != stderr &&
-        console_output_stream != printer_output_stream) {
-        fclose(console_output_stream);
+
+    if (!monitor_runtime_create(&runtime, board)) {
+        fprintf(stderr, "Unable to prepare monitor runtime.\n");
+        exit_code = EXIT_FAILURE;
+        goto shutdown;
     }
-    if (close_console_input && console_input_stream && console_input_stream != stdin) {
-        fclose(console_input_stream);
-    }
-    monitor_config_clear(&config);
-    pdp8_api_destroy(cpu);
+
+    exit_code = monitor_runtime_loop(&runtime);
+
+shutdown:
+    monitor_runtime_teardown(&runtime);
+    monitor_platform_shutdown();
+    monitor_config_clear(&runtime.config);
     return exit_code;
+}
+
+void monitor_platform_enqueue_key(uint8_t ch) {
+    if (!g_console) {
+        return;
+    }
+    (void)pdp8_kl8e_console_queue_input(g_console, ch);
 }
