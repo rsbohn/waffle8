@@ -1,6 +1,6 @@
 /
 / fib.asm
-/ Print the first five Fibonacci numbers (1, 1, 2, 3, 5) on the KL8E console.
+/ Print the first five Fibonacci numbers (1, 1, 2, 3, 5) on the KL8E console as four-digit octal.
 /
 
         *0200                   / Program origin
@@ -15,7 +15,7 @@ START,  CLA CLL                 / Ensure AC and link are cleared
         DCA CUR
 
 LOOP,   TAD CUR                 / AC = current Fibonacci number
-        JMS PRINT_DIGIT         / Print as single decimal digit
+        JMS PRINT_OCTAL         / Print as four-digit octal value
         JMS NEWLINE             / Terminate the line
 
         TAD PREV                / AC = previous term
@@ -34,16 +34,51 @@ LOOP,   TAD CUR                 / AC = current Fibonacci number
         HLT                     / Finished
 
 /------------------------------------------------------------
-/ PRINT_DIGIT - Print value in AC as a single decimal digit.
-/ Entry: AC = value 0-9
+/ PRINT_OCTAL - Print value in AC as a four-digit octal number.
+/ Entry: AC = value 0-4095
 /------------------------------------------------------------
-PRINT_DIGIT, 0                  / Return address slot
+PRINT_OCTAL, 0                  / Return address slot
         DCA TMP                 / Save value, clear AC
-        TAD TMP                 / Restore value
-        TAD ASCII_ZERO          / Convert to ASCII
-        JMS PUTCH               / Output character
-        CLA                     / Leave AC defaulted to 0
-        JMP I PRINT_DIGIT       / Return
+
+        TAD TMP                 / Isolate and print digit 3 (bits 9-11)
+        AND K7000
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        TAD ASCII_ZERO
+        JMS PUTCH
+
+        TAD TMP                 / Isolate and print digit 2 (bits 6-8)
+        AND K0700
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        RAR
+        TAD ASCII_ZERO
+        JMS PUTCH
+
+        TAD TMP                 / Isolate and print digit 1 (bits 3-5)
+        AND K0070
+        RAR
+        RAR
+        RAR
+        TAD ASCII_ZERO
+        JMS PUTCH
+
+        TAD TMP                 / Isolate and print digit 0 (bits 0-2)
+        AND K7
+        TAD ASCII_ZERO
+        JMS PUTCH
+
+        JMP I PRINT_OCTAL       / Return
 
 /------------------------------------------------------------
 / NEWLINE - Emit CR/LF pair on the console.
@@ -75,7 +110,7 @@ PREV,       0000                / Previous Fibonacci term
 CUR,        0000                / Current Fibonacci term
 NEXT,       0000                / Next term workspace
 COUNT,      0000                / Loop counter
-TMP,        0000                / Scratch for PRINT_DIGIT
+TMP,        0000                / Scratch for PRINT_OCTAL
 CHBUF,      0000                / Buffer for PUTCH
 
 ONE,        0001
@@ -83,5 +118,9 @@ COUNT_INIT, 07773               / -5 => run loop five times
 ASCII_ZERO, 0060                / ASCII '0'
 CR,         0015
 LF,         0012
+K7,         0007                / Mask for low 3 bits
+K0070,      0070                / Mask for bits 3-5
+K0700,      0700                / Mask for bits 6-8
+K7000,      7000                / Mask for bits 9-11
 
         $                       / End of program

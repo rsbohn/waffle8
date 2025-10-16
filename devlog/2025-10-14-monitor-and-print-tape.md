@@ -28,3 +28,7 @@ Read block 0001
 - Renamed the `load` command to the more authentic `dep`, keeping the existing multi-word deposit behaviour and updating help text.
 - Added a `fib.asm` sample that prints the first five Fibonacci numbers via the KL8E console, demonstrating the assembler + monitor workflow end-to-end.
 - Synced `README.md` to highlight the Python assembler, S-record inspection tool, monitor commands, and the `python3 -m factory` entry point.
+
+## Monitor Enhancements
+- Added a `pdp8_api_clear_halt` helper so front ends can resume a halted CPU without trampling AC or link; the monitor now calls it before `run` or single-step loops so stale HALT latches no longer block execution.
+- Introduced a shorthand `c [cycles]` command that continues from the current PC for the requested cycle count (default 1), relying on the same resume path as `run` and reporting the new PC/HALT state after each slice.
