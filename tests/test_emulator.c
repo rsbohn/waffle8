@@ -462,7 +462,17 @@ static int test_board_spec(void) {
     return 1;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    int verbose = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-v") == 0) {
+            verbose = 1;
+        } else {
+            fprintf(stderr, "Usage: %s [-v]\n", argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
     struct {
         const char *name;
         int (*fn)(void);
@@ -483,12 +493,20 @@ int main(void) {
     size_t total = sizeof(tests) / sizeof(tests[0]);
     size_t passed = 0;
     for (size_t i = 0; i < total; ++i) {
-        if (tests[i].fn()) {
+        int result = tests[i].fn();
+        if (result) {
             ++passed;
-        } else {
-            fprintf(stderr, "Test failed: %s\n", tests[i].name);
-            break;
+            if (verbose) {
+                printf("%s: PASS\n", tests[i].name);
+            }
+            continue;
         }
+
+        if (verbose) {
+            printf("%s: FAIL\n", tests[i].name);
+        }
+        fprintf(stderr, "Test failed: %s\n", tests[i].name);
+        break;
     }
 
     if (passed == total) {
