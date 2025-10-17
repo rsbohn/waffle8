@@ -58,6 +58,28 @@ Port the PDP-8 monitor (`tools/monitor.c`) from the POSIX host environment to th
 - Implement `save` / `restore` commands as “not implemented” stubs when on Fruit Jam (host behaviour unchanged).
 - Direct printer output to the on-screen console only on Fruit Jam (no external serial logging required initially).
 
+## Current Readiness Checklist
+
+- **Toolchain availability** – Run `tools/cross-compile-setup.sh` once to install the
+  ARM GCC toolchain, CMake, Ninja, and TinyUSB dependencies and to clone the
+  Pico SDK, pico-extras, and pico-playground into `/opt`. The script also writes
+  `/etc/profile.d/pico-sdk.sh`, exporting the `PICO_*` paths that the CMake build
+  expects.
+- **Reference material** – The Reload Apple //e port under
+  `/opt/fruitjam-apple2` provides working DVI, multicore, audio, and USB host
+  glue. Summaries of the HDMI bring-up sequence live in
+  `docs/apple2-dvi-notes.md`, and `docs/apple2-tinyusb-notes.md` covers the
+  TinyUSB keyboard host flow and callbacks we need to mirror before drafting
+  `fruitjam-board.c`.
+- **Platform interface defined** – `src/monitor_platform.h` now lists
+  the console, printer, keyboard, and timing hooks shared by the POSIX and Fruit
+  Jam builds. Platform shims can implement the API while the monitor core
+  remains agnostic about the host environment.
+- **Memory budget** – The Apple //e build allocates a 640×240 RGB332 framebuffer
+  (~150 KiB). Confirm the PDP-8 monitor can co-exist with the emulator state and
+  any USB buffers in RP2350 SRAM or adjust the text console resolution before
+  freezing the board implementation.
+
 ## Testing Expectations
 
 - `make monitor` still builds on the host; existing tests (`make -C tests && ./tests/pdp8_tests`) pass.
@@ -65,6 +87,42 @@ Port the PDP-8 monitor (`tools/monitor.c`) from the POSIX host environment to th
 - Provide a minimal Fruit Jam smoke test plan: e.g., booting to the monitor prompt, displaying `regs`, typing via USB keyboard, and verifying DVI output.
 - If hardware is unavailable during development, supply a host-side stub or notes describing how to exercise the text console/keyboard layers.
 
+## Configuration Plan (`pdp8.config`)
+
+The host monitor reads `pdp8.config` from disk to discover which devices to
+instantiate and where to route their I/O streams. The Fruit Jam build will not
+have a writable filesystem, so the platform layer must provide equivalent
+configuration data programmatically. The split will work as follows:
+
+- **POSIX backend** – continues to load `pdp8.config` from the working
+  directory. Failures still fall back to the built-in defaults already present
+  in `monitor.c`.
+- **Fruit Jam backend** – seeds the `monitor_config` struct handed to
+  `monitor_platform_init()` with the handful of device bindings we need
+  (KL8E keyboard/teleprinter pointing at the USB/DVI console, line printer
+  teeing to the same surface, and paper tape disabled for the first hardware
+  spin). The config lives in code as a small helper so future board revisions
+  can tweak it at compile time.
+
+This keeps the parsing logic untouched while avoiding any dependency on an SD
+card or flash filesystem.
+
 ## Open Questions
 
 - Is additional logging (e.g., UART for debugging) desired alongside the on-screen console?
+
+## Next Steps
+
+1. **Refactor the host monitor** – Introduce `monitor_platform_posix.c` that
+   wraps the existing `pdp8.config` parsing, FILE-based console/printer streams,
+   and non-blocking stdin logic behind the new abstraction. Update
+   `tools/monitor.c` to depend on the platform API instead of raw POSIX calls.
+2. **Model the Fruit Jam runtime** – Sketch `fruitjam-board.c` to implement the
+   same interface using the Pico SDK (DVI text console, TinyUSB keyboard, and a
+   cooperative main loop that feeds the emulator in bursts).
+3. **Align build targets** – Teach the top-level `makefile` how to compile the
+   shared monitor sources for both host and Fruit Jam outputs, using the Pico SDK
+   environment exported by `tools/cross-compile-setup.sh`.
+4. **Plan validation** – Outline a smoke test covering DVI bring-up, keyboard
+   entry, and monitor commands on hardware so regressions can be caught once the
+   new binaries are available.
