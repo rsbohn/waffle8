@@ -12,7 +12,24 @@ struct pdp8_line_printer {
     uint16_t column_limit;
     uint16_t column;
     bool ready;
+    bool color_active;
 };
+
+static void line_printer_start_color(pdp8_line_printer_t *printer) {
+    if (!printer || !printer->stream || printer->color_active) {
+        return;
+    }
+    fputs("\x1b[33m", printer->stream);
+    printer->color_active = true;
+}
+
+static void line_printer_stop_color(pdp8_line_printer_t *printer) {
+    if (!printer || !printer->stream || !printer->color_active) {
+        return;
+    }
+    fputs("\x1b[0m", printer->stream);
+    printer->color_active = false;
+}
 
 static void line_printer_emit(pdp8_line_printer_t *printer, uint8_t ch) {
     if (!printer || !printer->stream) {
@@ -20,21 +37,26 @@ static void line_printer_emit(pdp8_line_printer_t *printer, uint8_t ch) {
     }
 
     if (ch == '\r') {
+        line_printer_stop_color(printer);
         fputc('\r', printer->stream);
         printer->column = 0;
     } else if (ch == '\n') {
+        line_printer_stop_color(printer);
         fputc('\n', printer->stream);
         printer->column = 0;
     } else if (ch == '\f') {
+        line_printer_stop_color(printer);
         fputc('\f', printer->stream);
         printer->column = 0;
     } else if (ch == '\t') {
+        line_printer_start_color(printer);
         uint16_t spaces = 8u - (printer->column % 8u);
         for (uint16_t i = 0; i < spaces; ++i) {
             fputc(' ', printer->stream);
         }
         printer->column = (uint16_t)(printer->column + spaces);
     } else {
+        line_printer_start_color(printer);
         if (ch < 0x20u) {
             ch = '?';
         }
@@ -83,6 +105,7 @@ pdp8_line_printer_t *pdp8_line_printer_create(FILE *stream) {
     printer->column_limit = PDP8_LINE_PRINTER_DEFAULT_COLUMN_LIMIT;
     printer->column = 0;
     printer->ready = true;
+    printer->color_active = false;
     return printer;
 }
 
@@ -91,6 +114,7 @@ void pdp8_line_printer_destroy(pdp8_line_printer_t *printer) {
         return;
     }
     if (printer->stream) {
+        line_printer_stop_color(printer);
         fflush(printer->stream);
     }
     free(printer);
