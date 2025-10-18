@@ -365,7 +365,8 @@ def assemble(path: Path, output: Path) -> None:
     memory = assembler.second_pass()
     if not memory:
         raise AsmError("No output generated; empty program?")
-    start_addr = min(memory)
+    # Prefer an explicit START label for the entry point; fall back to the lowest word.
+    start_addr = assembler.symbols.get("START", min(memory))
     records = words_to_srec(memory, start_addr)
     try:
         output.write_text("\n".join(records) + "\n")
