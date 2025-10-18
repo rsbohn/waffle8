@@ -466,6 +466,8 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
                                                  char **state);
+static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
+                                                 char **state);
 
 static const struct monitor_command monitor_commands[] = {
     {"help", command_help, "help [command]", "Show command list or detailed help.", true},
@@ -475,6 +477,7 @@ static const struct monitor_command monitor_commands[] = {
     {"mem", command_mem, "mem <addr> [count]", "Dump memory words (octal).", true},
     {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
+    {"trace", command_trace, "trace <cycles>", "Execute N cycles, showing registers after each.", true},
     {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
     {"save", command_save, "save <file>", "Write RAM image to a file.", true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
@@ -886,6 +889,61 @@ static enum monitor_command_status command_reset(struct monitor_runtime *runtime
     return MONITOR_COMMAND_OK;
 }
 
+static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
+                                                 char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *cycles_tok = command_next_token(state);
+    if (!cycles_tok) {
+        monitor_console_puts("trace requires cycle count.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long cycles_val = 0;
+    if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+        monitor_console_printf("Invalid cycle count '%s'.\n", cycles_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    pdp8_api_clear_halt(runtime->cpu);
+    
+    for (long i = 0; i < cycles_val; ++i) {
+        // Show state before execution
+        uint16_t pc = pdp8_api_get_pc(runtime->cpu);
+        uint16_t ac = pdp8_api_get_ac(runtime->cpu);
+        uint8_t link = pdp8_api_get_link(runtime->cpu);
+        uint16_t instruction = pdp8_api_read_mem(runtime->cpu, pc);
+        
+        monitor_console_printf("[%04ld] PC=%04o AC=%04o LINK=%o INSTR=%04o -> ",
+                               i + 1, pc & 0x0FFFu, ac & 0x0FFFu, link & 0x1u, instruction & 0x0FFFu);
+        
+        // Execute one step
+        int executed = pdp8_api_step(runtime->cpu);
+        if (executed <= 0) {
+            monitor_console_puts("FAILED");
+            return MONITOR_COMMAND_ERROR;
+        }
+        
+        // Show state after execution
+        pc = pdp8_api_get_pc(runtime->cpu);
+        ac = pdp8_api_get_ac(runtime->cpu);
+        link = pdp8_api_get_link(runtime->cpu);
+        bool halted = pdp8_api_is_halted(runtime->cpu) != 0;
+        
+        monitor_console_printf("PC=%04o AC=%04o LINK=%o%s\n",
+                               pc & 0x0FFFu, ac & 0x0FFFu, link & 0x1u, halted ? " HALT" : "");
+        
+        if (halted) {
+            monitor_console_printf("CPU halted after %ld cycle(s).\n", i + 1);
+            break;
+        }
+    }
+    
+    return MONITOR_COMMAND_OK;
+}
+
 static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
     if (!runtime) {
         return;
@@ -1066,10 +1124,19 @@ static int monitor_runtime_loop(struct monitor_runtime *runtime) {
     return EXIT_SUCCESS;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     int exit_code = EXIT_SUCCESS;
     struct monitor_runtime runtime;
     monitor_runtime_init(&runtime);
+
+    const char *startup_image = NULL;
+    if (argc > 2) {
+        fprintf(stderr, "Usage: %s [image.srec]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (argc == 2) {
+        startup_image = argv[1];
+    }
 
     const pdp8_board_spec *board = NULL;
     bool config_loaded = false;
@@ -1093,6 +1160,35 @@ int main(void) {
         fprintf(stderr, "Unable to prepare monitor runtime.\n");
         exit_code = EXIT_FAILURE;
         goto shutdown;
+    }
+
+    if (startup_image) {
+        size_t words_loaded = 0;
+        size_t highest_address = 0;
+        uint16_t start_address = 0;
+        bool start_valid = false;
+
+        if (load_srec_image(runtime.cpu,
+                            startup_image,
+                            runtime.memory_words,
+                            &words_loaded,
+                            &highest_address,
+                            &start_address,
+                            &start_valid) != 0) {
+            exit_code = EXIT_FAILURE;
+            goto shutdown;
+        }
+
+        monitor_console_printf("Loaded %zu word(s) from %s", words_loaded, startup_image);
+        if (words_loaded > 0) {
+            monitor_console_printf(" (last %04zo)", highest_address);
+        }
+        monitor_console_puts(".");
+
+        if (start_valid) {
+            pdp8_api_set_pc(runtime.cpu, start_address & 0x0FFFu);
+            monitor_console_printf("Start address %04o set as PC.\n", start_address & 0x0FFFu);
+        }
     }
 
     exit_code = monitor_runtime_loop(&runtime);
