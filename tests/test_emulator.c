@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <stdbool.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
@@ -46,6 +48,198 @@
             return 0;                                                                                  \
         }                                                                                              \
     } while (0)
+
+static int load_srec_into_cpu(pdp8_t *cpu,
+                              const char *path,
+                              uint16_t *start_address,
+                              int *start_valid) {
+    if (start_address) {
+        *start_address = 0;
+    }
+    if (start_valid) {
+        *start_valid = 0;
+    }
+    if (!cpu || !path) {
+        return -1;
+    }
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        fprintf(stderr, "Unable to open S-record '%s'\n", path);
+        return -1;
+    }
+
+    const size_t memory_words = 4096u;
+    const size_t memory_bytes = memory_words * 2u;
+    uint8_t *byte_data = (uint8_t *)calloc(memory_bytes, sizeof(uint8_t));
+    uint8_t *byte_mask = (uint8_t *)calloc(memory_bytes, sizeof(uint8_t));
+    if (!byte_data || !byte_mask) {
+        fprintf(stderr, "Unable to allocate buffer for '%s'\n", path);
+        free(byte_data);
+        free(byte_mask);
+        fclose(fp);
+        return -1;
+    }
+
+    char line[1024];
+    int have_data = 0;
+    unsigned long start_byte_address = 0ul;
+    int have_start = 0;
+
+    int status = -1;
+
+    while (fgets(line, sizeof line, fp) != NULL) {
+        char *cursor = line;
+        while (*cursor && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+
+        size_t len = strlen(cursor);
+        while (len > 0 && isspace((unsigned char)cursor[len - 1])) {
+            cursor[--len] = '\0';
+        }
+
+        if (len == 0u) {
+            continue;
+        }
+
+        if (cursor[0] != 'S' && cursor[0] != 's') {
+            continue;
+        }
+
+        char type = (char)toupper((unsigned char)cursor[1]);
+        if (type == '1' || type == '2' || type == '3') {
+            size_t addr_digits = (type == '1') ? 4u : (type == '2') ? 6u : 8u;
+            size_t addr_bytes = addr_digits / 2u;
+
+            if (len < 4u + addr_digits + 2u) {
+                fprintf(stderr, "Malformed S-record line: %s\n", cursor);
+                goto cleanup;
+            }
+
+            char count_str[3] = {cursor[2], cursor[3], '\0'};
+            char *endptr = NULL;
+            unsigned long count = strtoul(count_str, &endptr, 16);
+            if (!endptr || *endptr != '\0') {
+                fprintf(stderr, "Invalid byte count in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+
+            char addr_buf[9];
+            if (addr_digits >= sizeof addr_buf) {
+                fprintf(stderr, "Address field too large in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+            memcpy(addr_buf, cursor + 4, addr_digits);
+            addr_buf[addr_digits] = '\0';
+            endptr = NULL;
+            unsigned long base_address = strtoul(addr_buf, &endptr, 16);
+            if (!endptr || *endptr != '\0') {
+                fprintf(stderr, "Invalid address in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+
+            const char *data_ptr = cursor + 4 + addr_digits;
+            const char *checksum_ptr = cursor + len - 2;
+            if (checksum_ptr < data_ptr) {
+                fprintf(stderr, "Malformed data payload in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+            size_t data_hex_len = (size_t)(checksum_ptr - data_ptr);
+            if (data_hex_len % 2u != 0u) {
+                fprintf(stderr, "Odd number of data nybbles in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+
+            size_t data_bytes = data_hex_len / 2u;
+            if (count != data_bytes + addr_bytes + 1u) {
+                fprintf(stderr, "Count mismatch in S-record: %s\n", cursor);
+                goto cleanup;
+            }
+
+            for (size_t i = 0; i < data_bytes; ++i) {
+                char byte_buf[3] = {data_ptr[i * 2u], data_ptr[i * 2u + 1u], '\0'};
+                endptr = NULL;
+                unsigned long value = strtoul(byte_buf, &endptr, 16);
+                if (!endptr || *endptr != '\0' || value > 0xFFul) {
+                    fprintf(stderr, "Invalid data byte in S-record: %s\n", cursor);
+                    goto cleanup;
+                }
+
+                unsigned long absolute = base_address + i;
+                if (absolute >= memory_bytes) {
+                    continue;
+                }
+                byte_data[absolute] = (uint8_t)value;
+                byte_mask[absolute] = 1u;
+                have_data = 1;
+            }
+        } else if (type == '7' || type == '8' || type == '9') {
+            size_t addr_digits = (type == '9') ? 4u : (type == '8') ? 6u : 8u;
+            if (len < 4u + addr_digits) {
+                continue;
+            }
+            char addr_buf[9];
+            if (addr_digits >= sizeof addr_buf) {
+                continue;
+            }
+            memcpy(addr_buf, cursor + 4, addr_digits);
+            addr_buf[addr_digits] = '\0';
+            char *endptr = NULL;
+            unsigned long start_addr = strtoul(addr_buf, &endptr, 16);
+            if (endptr && *endptr == '\0') {
+                start_byte_address = start_addr;
+                have_start = 1;
+            }
+        }
+    }
+
+    if (!have_data) {
+        fprintf(stderr, "No data records found in '%s'\n", path);
+        goto cleanup;
+    }
+
+    size_t words_written = 0;
+    int encountered_partial = 0;
+    for (size_t word = 0; word < memory_words; ++word) {
+        size_t lo_index = word * 2u;
+        size_t hi_index = lo_index + 1u;
+        bool have_lo = byte_mask[lo_index] != 0u;
+        bool have_hi = byte_mask[hi_index] != 0u;
+
+        if (have_lo && have_hi) {
+            uint16_t value =
+                (uint16_t)(((uint16_t)(byte_data[hi_index] & 0x0Fu) << 8u) | byte_data[lo_index]);
+            if (pdp8_api_write_mem(cpu, (uint16_t)word, (uint16_t)(value & 0x0FFFu)) != 0) {
+                fprintf(stderr, "Failed to write memory at %04zo while loading '%s'\n", word, path);
+                goto cleanup;
+            }
+            ++words_written;
+        } else if (have_lo || have_hi) {
+            encountered_partial = 1;
+        }
+    }
+
+    if (words_written == 0 || encountered_partial) {
+        fprintf(stderr, "Incomplete word data encountered in '%s'\n", path);
+        goto cleanup;
+    }
+
+    if (start_address && have_start) {
+        *start_address = (uint16_t)((start_byte_address / 2u) & 0x0FFFu);
+    }
+    if (start_valid) {
+        *start_valid = have_start ? 1 : 0;
+    }
+
+    status = 0;
+
+cleanup:
+    free(byte_data);
+    free(byte_mask);
+    fclose(fp);
+    return status;
+}
 
 static int test_memory_reference(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
@@ -326,10 +520,88 @@ static int test_line_printer(void) {
     long position = ftell(sink);
     ASSERT_TRUE("line printer wrote data", position >= 1);
     fseek(sink, 0, SEEK_SET);
-    char buffer[4] = {0};
+    char buffer[16] = {0};
     size_t len = fread(buffer, 1, sizeof(buffer) - 1, sink);
-    ASSERT_INT_EQ("printed length", 1, len);
-    ASSERT_STR_EQ("printed character", "A", buffer);
+    ASSERT_TRUE("printed output length", len > 0 && len < sizeof(buffer));
+    ASSERT_EQ("printed character", 'A', buffer[len - 1]);
+
+    pdp8_line_printer_destroy(printer);
+    fclose(sink);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_demo_core_fixture(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    FILE *sink = tmpfile();
+    if (!sink) {
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    pdp8_line_printer_t *printer = pdp8_line_printer_create(sink);
+    if (!printer) {
+        fclose(sink);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    ASSERT_INT_EQ("attach line printer", 0, pdp8_line_printer_attach(cpu, printer));
+    ASSERT_INT_EQ("load core image", 0, load_srec_into_cpu(cpu, "demo/core.srec", NULL, NULL));
+
+    uint16_t fixture_start = 0;
+    int fixture_start_valid = 0;
+    ASSERT_INT_EQ("load fixture image",
+                  0,
+                  load_srec_into_cpu(cpu, "demo/fixture.srec", &fixture_start, &fixture_start_valid));
+
+    pdp8_api_set_pc(cpu, 07030);
+    ASSERT_TRUE("core init executed", pdp8_api_run(cpu, 64) > 0);
+    ASSERT_TRUE("core init halted", pdp8_api_is_halted(cpu) != 0);
+    ASSERT_EQ("core call vector opcode", 05403, pdp8_api_read_mem(cpu, 0002));
+    ASSERT_EQ("core entry address", 07000, pdp8_api_read_mem(cpu, 0003));
+
+    pdp8_api_clear_halt(cpu);
+    uint16_t start_pc = fixture_start_valid ? fixture_start : 0200;
+    pdp8_api_set_pc(cpu, start_pc);
+    ASSERT_TRUE("fixture executed", pdp8_api_run(cpu, 2000) > 0);
+    ASSERT_TRUE("fixture halted", pdp8_api_is_halted(cpu) != 0);
+
+    ASSERT_EQ("dispatch call counter", 0003, pdp8_api_read_mem(cpu, 0007));
+    ASSERT_EQ("final AC", 0053, pdp8_api_get_ac(cpu));
+
+    ASSERT_INT_EQ("seek output end", 0, fseek(sink, 0, SEEK_END));
+    long output_len = ftell(sink);
+    ASSERT_TRUE("fixture produced output", output_len >= 3);
+    ASSERT_INT_EQ("rewind output", 0, fseek(sink, 0, SEEK_SET));
+
+    char buffer[64] = {0};
+    size_t read_len = fread(buffer, 1, sizeof(buffer) - 1u, sink);
+    ASSERT_TRUE("fixture output length", read_len > 0 && read_len < sizeof(buffer));
+
+    char printable[8] = {0};
+    size_t printable_len = 0;
+    for (size_t idx = 0; idx < read_len; ++idx) {
+        unsigned char ch = (unsigned char)buffer[idx];
+        if (ch == 0x1Bu && idx + 1u < read_len && buffer[idx + 1u] == '[') {
+            idx += 2u;
+            while (idx < read_len && (unsigned char)buffer[idx] < 0x40u) {
+                ++idx;
+            }
+            continue;
+        }
+        if (printable_len + 1u < sizeof(printable)) {
+            printable[printable_len++] = (char)ch;
+        }
+    }
+    printable[printable_len] = '\0';
+
+    ASSERT_INT_EQ("fixture printable length", 3, (int)printable_len);
+    ASSERT_STR_EQ("fixture output sequence", "..+", printable);
 
     pdp8_line_printer_destroy(printer);
     fclose(sink);
@@ -485,6 +757,7 @@ int main(int argc, char **argv) {
         {"clear halt", test_clear_halt},
         {"kl8e console", test_kl8e_console},
         {"line printer", test_line_printer},
+        {"core fixture", test_demo_core_fixture},
         {"paper tape parser", test_paper_tape_parser},
         {"paper tape device", test_paper_tape_device},
         {"fruit jam board", test_board_spec},
