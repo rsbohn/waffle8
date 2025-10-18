@@ -415,46 +415,57 @@ def _auto_int(value: str) -> int:
     return int(value, base)
 
 
-def load_srec(path: Path) -> List[Tuple[int, int]]:
+def load_srec(path: Path) -> Tuple[List[Tuple[int, int]], Optional[int]]:
     try:
         lines = path.read_text().splitlines()
     except OSError as exc:
         raise RuntimeError(f"Unable to read {path}: {exc}") from exc
 
     byte_map = {}
+    start_word: Optional[int] = None
     for raw in lines:
         line = raw.strip()
         if not line or not line.startswith("S"):
             continue
         record_type = line[1]
-        if record_type not in "123":
-            continue
-        try:
-            count = int(line[2:4], 16)
-        except ValueError as exc:
-            raise RuntimeError(f"Invalid count in record {line}") from exc
-
-        addr_len = {"1": 4, "2": 6, "3": 8}[record_type]
-        addr_field = line[4 : 4 + addr_len]
-        data_field = line[4 + addr_len : -2]
-        try:
-            base_address = int(addr_field, 16)
-        except ValueError as exc:
-            raise RuntimeError(f"Invalid address in record {line}") from exc
-
-        data_bytes: List[int] = []
-        for idx in range(0, len(data_field), 2):
+        if record_type in "123":
             try:
-                data_bytes.append(int(data_field[idx : idx + 2], 16))
+                count = int(line[2:4], 16)
             except ValueError as exc:
-                raise RuntimeError(f"Invalid data byte in record {line}") from exc
+                raise RuntimeError(f"Invalid count in record {line}") from exc
 
-        expected_payload = count - (addr_len // 2) - 1
-        if expected_payload != len(data_bytes):
-            raise RuntimeError(f"Count mismatch in record {line}")
+            addr_len = {"1": 4, "2": 6, "3": 8}[record_type]
+            addr_field = line[4 : 4 + addr_len]
+            data_field = line[4 + addr_len : -2]
+            try:
+                base_address = int(addr_field, 16)
+            except ValueError as exc:
+                raise RuntimeError(f"Invalid address in record {line}") from exc
 
-        for offset, value in enumerate(data_bytes):
-            byte_map[base_address + offset] = value
+            data_bytes: List[int] = []
+            for idx in range(0, len(data_field), 2):
+                try:
+                    data_bytes.append(int(data_field[idx : idx + 2], 16))
+                except ValueError as exc:
+                    raise RuntimeError(f"Invalid data byte in record {line}") from exc
+
+            expected_payload = count - (addr_len // 2) - 1
+            if expected_payload != len(data_bytes):
+                raise RuntimeError(f"Count mismatch in record {line}")
+
+            for offset, value in enumerate(data_bytes):
+                byte_map[base_address + offset] = value
+            continue
+
+        if record_type in "789":
+            addr_len = {"7": 8, "8": 6, "9": 4}[record_type]
+            addr_field = line[4 : 4 + addr_len]
+            try:
+                start_byte = int(addr_field, 16)
+            except ValueError as exc:
+                raise RuntimeError(f"Invalid start address in record {line}") from exc
+            start_word = (start_byte // 2) & WORD_MASK
+            continue
 
     words = {}
     for byte_addr in sorted(byte_map):
@@ -470,7 +481,7 @@ def load_srec(path: Path) -> List[Tuple[int, int]]:
     if not words:
         raise RuntimeError(f"No data records found in {path}")
 
-    return sorted(words.items())
+    return sorted(words.items()), start_word
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -486,7 +497,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--start",
         type=_auto_int,
         default=None,
-        help="Override start address (accepts 0o, 0x prefixes). Defaults to lowest word.",
+        help="Override start address (accepts 0o, 0x prefixes). Defaults to S-record START if present, otherwise the lowest word.",
     )
     parser.add_argument(
         "--input",
@@ -525,7 +536,7 @@ def run_program(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    rom_words = load_srec(args.image)
+    rom_words, start_from_image = load_srec(args.image)
 
     output_stream = None if args.quiet else sys.stdout
     console = KL8EConsole(output_stream=output_stream)
@@ -535,7 +546,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.input:
         console.queue_input_string(args.input)
 
-    pc, ac, halted = run_program(cpu, console, rom_words, args.start, args.cycles)
+    effective_start = args.start if args.start is not None else start_from_image
+    pc, ac, halted = run_program(cpu, console, rom_words, effective_start, args.cycles)
     captured_output = console.drain_output()
 
     if args.quiet and captured_output:

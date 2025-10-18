@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_srec(path: Path) -> List[Tuple[int, int]]:
+def load_srec(path: Path) -> Tuple[List[Tuple[int, int]], Optional[int]]:
     """
     Parse a little-endian Motorola S-record file into (word_address, word_value) pairs.
 
@@ -63,6 +63,7 @@ def load_srec(path: Path) -> List[Tuple[int, int]]:
         raise EmulatorError(f"Unable to read {path}: {exc}") from exc
 
     byte_map: Dict[int, int] = {}
+    start_word: Optional[int] = None
     for raw_line in lines:
         line = raw_line.strip()
         if not line or not line.startswith("S"):
@@ -70,6 +71,14 @@ def load_srec(path: Path) -> List[Tuple[int, int]]:
 
         record_type = line[1]
         if record_type not in "123":  # Data-bearing record types
+            if record_type in "789":
+                addr_digits = {"7": 8, "8": 6, "9": 4}[record_type]
+                addr_field = line[4 : 4 + addr_digits]
+                try:
+                    start_byte = int(addr_field, 16)
+                except ValueError as exc:
+                    raise EmulatorError(f"Invalid start address in record: {line}") from exc
+                start_word = (start_byte // 2) & 0x0FFF
             continue
 
         try:
@@ -121,7 +130,7 @@ def load_srec(path: Path) -> List[Tuple[int, int]]:
     if not words:
         raise EmulatorError("No complete words decoded from S-record.")
 
-    return sorted(words.items())
+    return sorted(words.items()), start_word
 
 
 def load_library() -> ctypes.CDLL:
@@ -399,7 +408,7 @@ def load_device_config(path: Path) -> Tuple[DeviceConfig, bool]:
 
 def main() -> int:
     args = parse_args()
-    rom_words = load_srec(args.image)
+    rom_words, start_word = load_srec(args.image)
 
     lib = load_library()
     configure_api(lib)
@@ -476,10 +485,14 @@ def main() -> int:
         lib.pdp8_api_reset(cpu)
 
         start_address, end_address = load_rom_into_memory(lib, cpu, rom_words)
-        install_reset_vector(lib, cpu, start_address)
+        entry_address = start_word if start_word is not None else start_address
+        install_reset_vector(lib, cpu, entry_address)
 
         print(f"Loaded {len(rom_words)} word(s) from {start_address:04o} to {end_address:04o}.")
-        print(f"Reset vector set: 0000 -> JMP I 20, 0020 -> {start_address:04o}.")
+        if start_word is not None and start_word != start_address:
+            print(f"Reset vector set from S-record START: 0000 -> JMP I 20, 0020 -> {entry_address:04o}.")
+        else:
+            print(f"Reset vector set: 0000 -> JMP I 20, 0020 -> {entry_address:04o}.")
         print("Type 'go' to start the factory, or 'quit' to exit.")
 
         try:
