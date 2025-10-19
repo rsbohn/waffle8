@@ -1,0 +1,58 @@
+# Magtape Device Design – 2025-10-19
+
+## Goals
+- Expose the host `demo/` directory as a read-only magnetic tape unit so existing sample programs can be streamed into the PDP-8.
+- Provide a second unit backed by `magtape/` that captures emulator output by appending new files on each write, avoiding in-place mutation.
+- Integrate with the monitor so operators can inspect tape state and control rewinds without restarting the emulator.
+
+## Device Model
+- Implement a new `pdp8_magtape_device` alongside existing peripherals in `src/emulator/`.
+- Map PDP-8 magtape IOTs (GO, READ, WRITE, SKIP, REWIND, SENSE) to buffered file operations. Maintain controller state (current unit, position, ready/error flags).
+- Represent each host file as a sequential record. Reads stream 12-bit words; end-of-record emits the appropriate status bit. End-of-tape occurs after the final file.
+- For read-only units, WRITE/ERASE operations should raise an error condition and leave the tape positioned.
+
+## Host Backing
+- **Unit 0 (read-only demo):**
+  - Configure with `path = demo`, `write_protected = true`.
+  - Enumerate files on attach; cache a manifest containing filename, size, and precomputed word count.
+  - Reject host-side changes by opening files read-only and treating missing files as fatal until restart.
+- **Unit 1 (append-only magtape):**
+  - Configure with `path = magtape`, `write_protected = false`.
+  - On WRITE, create a new file (e.g., `record-YYYYMMDD-HHMMSS.tap` or `recordNNNN.tap`) and stream the incoming record until STOP/EOF.
+  - Subsequent READ commands replay the newly created files in manifest order; no overwrites.
+  - Consider storing a small header per record: first word = payload length, followed by contents, terminated by a sentinel word so the loader can recover even on partial writes.
+
+## Monitor Integration
+- Extend `pdp8.config` with stanzas such as:
+  ```
+  device magtape0 {
+    path = demo
+    unit = 0
+    write_protected = true
+  }
+
+  device magtape1 {
+    path = magtape
+    unit = 1
+    write_protected = false
+  }
+  ```
+- At startup, parse these entries and attach the corresponding magtape units.
+- Add monitor commands:
+  - `show magtape` → list mounted units, current file, record position, protection state.
+  - `magtape rewind <unit>` → rewind to the first record.
+  - `magtape new <unit>` (writable units only) → close the current output file and begin a fresh record on the next WRITE.
+- Surface write-protect violations and end-of-tape events in the monitor transcript for operator visibility.
+
+## Open Questions
+- Decide on exact PDP-8 controller emulation (e.g., TC08 vs. TD8E) to match opcode semantics and timing expectations.
+- Determine if we need CRC or parity simulation per record or whether raw word streaming suffices.
+- Define how partial writes (emulator crash mid-record) should be handled—truncate on next mount or retain the incomplete file for debugging.
+
+## Host Utility: Magtape Tooling
+- Build a Python helper (e.g., `tools/magtape_tool.py`) that understands the record layout described above.
+- `list` command should enumerate reels/records, showing unit, filename, record length (words/bytes), and any timestamps.
+- `extract` command should write a chosen record to a target directory, either as raw 12-bit word dumps or converted S-records if metadata allows.
+- For append-only reels, include an option to bundle the latest session into a single tar/zip for archiving.
+- Tool should tolerate partially written records: warn the operator, offer `--force` to dump the raw payload, and exit non-zero by default.
+- Future nice-to-have: ability to stitch multiple records into a bootable image (e.g., reassembling OS/8 distributions) once the emulator-side format settles.
