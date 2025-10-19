@@ -55,6 +55,7 @@ static void line_printer_emit(pdp8_line_printer_t *printer, uint8_t ch) {
             fputc(' ', printer->stream);
         }
         printer->column = (uint16_t)(printer->column + spaces);
+        line_printer_stop_color(printer);
     } else {
         line_printer_start_color(printer);
         if (ch < 0x20u) {
@@ -63,8 +64,11 @@ static void line_printer_emit(pdp8_line_printer_t *printer, uint8_t ch) {
         fputc((int)ch, printer->stream);
         printer->column = (uint16_t)(printer->column + 1u);
         if (printer->column_limit > 0u && printer->column >= printer->column_limit) {
+            line_printer_stop_color(printer);
             fputc('\n', printer->stream);
             printer->column = 0;
+        } else {
+            line_printer_stop_color(printer);
         }
     }
     fflush(printer->stream);

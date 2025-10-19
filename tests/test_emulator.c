@@ -523,7 +523,16 @@ static int test_line_printer(void) {
     char buffer[16] = {0};
     size_t len = fread(buffer, 1, sizeof(buffer) - 1, sink);
     ASSERT_TRUE("printed output length", len > 0 && len < sizeof(buffer));
-    ASSERT_EQ("printed character", 'A', buffer[len - 1]);
+
+    const char *payload = memchr(buffer, 'A', len);
+    ASSERT_TRUE("printed character present", payload != NULL);
+
+    static const char reset_sequence[] = "\x1b[0m";
+    ASSERT_TRUE("line printer colour reset",
+                len >= sizeof(reset_sequence) - 1 &&
+                    memcmp(buffer + len - (sizeof(reset_sequence) - 1),
+                           reset_sequence,
+                           sizeof(reset_sequence) - 1) == 0);
 
     pdp8_line_printer_destroy(printer);
     fclose(sink);
