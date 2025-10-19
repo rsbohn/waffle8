@@ -477,7 +477,7 @@ static const struct monitor_command monitor_commands[] = {
     {"mem", command_mem, "mem <addr> [count]", "Dump memory words (octal).", true},
     {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
-    {"trace", command_trace, "trace <cycles>", "Execute N cycles, showing registers after each.", true},
+    {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
     {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
     {"save", command_save, "save <file>", "Write RAM image to a file.", true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
@@ -693,7 +693,7 @@ static enum monitor_command_status command_continue(struct monitor_runtime *runt
         return MONITOR_COMMAND_ERROR;
     }
 
-    monitor_console_printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
+    monitor_console_printf("\nExecuted %d cycle(s). PC=%04o HALT=%s\n",
                            executed,
                            pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
                            pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
@@ -738,7 +738,7 @@ static enum monitor_command_status command_run(struct monitor_runtime *runtime,
         return MONITOR_COMMAND_ERROR;
     }
 
-    monitor_console_printf("Executed %d cycle(s). PC=%04o HALT=%s\n",
+    monitor_console_printf("\nExecuted %d cycle(s). PC=%04o HALT=%s\n",
                            executed,
                            pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
                            pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
@@ -896,15 +896,13 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
     }
 
     char *cycles_tok = command_next_token(state);
-    if (!cycles_tok) {
-        monitor_console_puts("trace requires cycle count.");
-        return MONITOR_COMMAND_ERROR;
-    }
-
-    long cycles_val = 0;
-    if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
-        monitor_console_printf("Invalid cycle count '%s'.\n", cycles_tok);
-        return MONITOR_COMMAND_ERROR;
+    long cycles_val = 1;  // Default to 1 cycle
+    
+    if (cycles_tok) {
+        if (parse_number(cycles_tok, &cycles_val) != 0 || cycles_val <= 0) {
+            monitor_console_printf("Invalid cycle count '%s'.\n", cycles_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
     }
 
     pdp8_api_clear_halt(runtime->cpu);
@@ -916,7 +914,7 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
         uint8_t link = pdp8_api_get_link(runtime->cpu);
         uint16_t instruction = pdp8_api_read_mem(runtime->cpu, pc);
         
-        monitor_console_printf("[%04ld] PC=%04o AC=%04o LINK=%o INSTR=%04o -> ",
+        monitor_console_printf("[%04lo] PC=%04o AC=%04o LINK=%o INSTR=%04o -> ",
                                i + 1, pc & 0x0FFFu, ac & 0x0FFFu, link & 0x1u, instruction & 0x0FFFu);
         
         // Execute one step
@@ -936,7 +934,7 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
                                pc & 0x0FFFu, ac & 0x0FFFu, link & 0x1u, halted ? " HALT" : "");
         
         if (halted) {
-            monitor_console_printf("CPU halted after %ld cycle(s).\n", i + 1);
+            monitor_console_printf("CPU halted after 0%04lo cycle(s).\n", i + 1);
             break;
         }
     }
