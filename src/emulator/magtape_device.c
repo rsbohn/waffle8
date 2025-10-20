@@ -527,7 +527,7 @@ static int reload_manifest(struct magtape_unit *unit) {
 
     struct dirent *entry = NULL;
     while ((entry = readdir(dir)) != NULL) {
-        if (!entry->d_name || entry->d_name[0] == '.') {
+        if (entry->d_name[0] == '.') {
             continue;
         }
         char *full_path = join_path(unit->path, entry->d_name);
