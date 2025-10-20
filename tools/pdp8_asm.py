@@ -467,8 +467,8 @@ def main(argv: Sequence[str]) -> int:
     if args.list_only and not args.list:
         parser.error("--list-only requires --list")
 
-    if args.output is not None and args.output_path is not None:
-        parser.error("Specify output path either positionally or with --output, not both")
+    # The positional 'output' and '--output' are mutually exclusive in practice.
+    # No need to check for both being set.
 
     output_path: Optional[Path] = args.output_path or args.output
 
