@@ -3,12 +3,12 @@
     * 200
     CLA CLL
     TAD DOT_CHAR
-    DCA 0005
+    DCA 0006        / Store in VPTR (was 0005)
     TAD ZERO
-    DCA 0004
+    DCA 0005        / Store in BIOS selector (was 0004)
 
-    JMS 0001
-    JMS 0001
+    JMS 0002
+    JMS 0002
     CLA
     TAD 0007
     TAD NEG2
@@ -19,19 +19,19 @@
 TEST_FAIL,
     CLA
     TAD HYPHEN_CHAR
-    DCA 0005    / vptr character value
+    DCA 0006        / VPTR character value (was 0005)
     TAD ZERO    
-    DCA 0004    / Operation PRN_PUTCH
-    JMS 0001
+    DCA 0005        / BIOS selector (was 0004)
+    JMS 0002
     HLT         / Halt indicating test failed
 
 TEST_PASS,
     CLA
     TAD PLUS_CHAR
-    DCA 0005    / vptr character value
+    DCA 0006        / VPTR character value (was 0005)  
     TAD ZERO    
-    DCA 0004    / Operation PRN_PUTCH
-    JMS 0001
+    DCA 0005        / BIOS selector (was 0004)
+    JMS 0002
     HLT         / Halt with AC=1 if test passed
 
 NEG2, 7776      / -2 in octal

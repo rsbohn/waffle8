@@ -4,9 +4,10 @@
 / It echoes characters typed on the keyboard to the teleprinter until ESC is pressed.
 
 / Zero-page interface slots used by core.asm
-        *0004
-CORE_OPCODE, 0                   / Core opcode slot
-CORE_VPTR, 0                     / Core parameter slot
+        *0005
+CORE_OPCODE, 0                   / Core opcode slot (BIOS selector)
+        *0006
+CORE_VPTR, 0                     / Core parameter slot (VPTR)
 
         *0200                   / Program origin
 
@@ -20,7 +21,7 @@ ECHO_LOOP,
         DCA CORE_OPCODE         / Store opcode in core system
         CLA                     / Clear vptr
         DCA CORE_VPTR
-        JMS I CORE_ENTRY        / Call core system to get character
+        JMS 0002                / Call core system to get character
         TAD CORE_VPTR           / Get the character that was read
         DCA CHAR                / Store it
         
@@ -35,7 +36,7 @@ ECHO_CHAR,
         DCA CORE_OPCODE         / Store opcode in core system
         TAD CHAR                / Load character to output
         DCA CORE_VPTR           / Store in vptr
-        JMS I CORE_ENTRY        / Call core system to output character
+        JMS 0002                / Call core system to output character
         
         JMP ECHO_LOOP           / Continue echoing
 
@@ -64,7 +65,7 @@ PRINT_LOOP,
 
 PRINT_NEXT,
         DCA CORE_VPTR           / Store character for core system
-        JMS I CORE_ENTRY        / Output character via core system
+        JMS 0002                / Output character via core system
         
         ISZ CHAR_PTR            / Advance to next character
         JMP PRINT_LOOP          / Continue
@@ -72,7 +73,6 @@ PRINT_NEXT,
 /------------------------------------------------------------
 / Data and constants
 /------------------------------------------------------------
-CORE_ENTRY, 7000                / Entry point for core system
 
 GETCH_OP, 1                     / Opcode 1: KL8E keyboard input
 PUTCH_OP, 2                     / Opcode 2: KL8E teleprinter output
