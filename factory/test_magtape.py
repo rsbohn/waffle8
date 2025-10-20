@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Minimal sanity check for the magtape device.
+Minimal sanity checks for the magtape device.
 
-python3 factory/test_magtape.py [--use-sense]
+Usage:
+    python3 factory/test_magtape.py [seek|ready|read|write]
 
-Loads the PDP-8 shared library, attaches a magtape controller, configures
-unit 0 to point at the repository's demo directory, and prints the name of
-the current record for that unit.
+Each subcommand exercises the real IOT interface rather than relying solely
+on host-side helpers.
 """
 
 from __future__ import annotations
@@ -18,11 +18,15 @@ from pathlib import Path
 
 MAGTAPE_INSTR_GO = 0o6701
 MAGTAPE_INSTR_READ = 0o6702
+MAGTAPE_INSTR_WRITE = 0o6704
 MAGTAPE_INSTR_SKIP = 0o6710
 MAGTAPE_INSTR_SENSE = 0o6740
 
+MAGTAPE_STATUS_READY = 0x0001
+MAGTAPE_STATUS_ERROR = 0x0002
 MAGTAPE_STATUS_EOR = 0x0004
 MAGTAPE_STATUS_EOT = 0x0008
+MAGTAPE_STATUS_WRITE_PROTECT = 0x0010
 
 
 class MagtapeUnitParams(ctypes.Structure):
@@ -55,24 +59,21 @@ class MagtapeUnitStatus(ctypes.Structure):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Test magtape device functionality.")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
+    parser.set_defaults(command="seek")
+
     # Seek subcommand
-    seek_parser = subparsers.add_parser("seek", help="Run seek test to list all records on magtape unit 0")
-    
+    subparsers.add_parser("seek", help="Run seek test to list all records on magtape unit 0")
+
     # Ready subcommand
-    ready_parser = subparsers.add_parser("ready", help="Test IOT 6710 (SKIP) instruction ready status detection")
-    
+    subparsers.add_parser("ready", help="Test IOT 6710 (SKIP) instruction ready status detection")
+
     # Read subcommand
-    read_parser = subparsers.add_parser("read", help="Test IOT 6710/6702 to read and display current record words")
-    
-    args = parser.parse_args()
-    
-    # Show help if no command provided
-    if not args.command:
-        parser.print_help()
-        raise SystemExit(0)
-    
-    return args
+    subparsers.add_parser("read", help="Test IOT 6710/6702 to read and display current record words")
+
+    # Write subcommand
+    subparsers.add_parser("write", help="Test IOT 6704 to append a record on magtape unit 1")
+
+    return parser.parse_args()
 
 
 def _read_limit(status: MagtapeUnitStatus) -> int:
@@ -146,6 +147,9 @@ def configure_signatures(lib: ctypes.CDLL) -> None:
     ]
     lib.pdp8_magtape_device_get_status.restype = ctypes.c_int
 
+    lib.pdp8_magtape_device_force_new_record.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.pdp8_magtape_device_force_new_record.restype = ctypes.c_int
+
 
 def execute_iot(lib: ctypes.CDLL, cpu: int, instruction: int, ac: int | None = None) -> int:
     if ac is not None:
@@ -162,6 +166,11 @@ def execute_iot(lib: ctypes.CDLL, cpu: int, instruction: int, ac: int | None = N
     if lib.pdp8_api_step(cpu) == 0:
         raise RuntimeError("Failed to execute IOT instruction.")
     return lib.pdp8_api_get_ac(cpu) & 0x0FFF
+
+
+def sense_status(lib: ctypes.CDLL, cpu: int) -> int:
+    """Execute IOT 6740 and return the raw 12-bit status word."""
+    return execute_iot(lib, cpu, MAGTAPE_INSTR_SENSE)
 
 
 def seek_next_record(
@@ -352,6 +361,70 @@ def test_read_record(lib: ctypes.CDLL, cpu: int, device: int, unit: int = 0) -> 
         print(f"Warning: Hit safety limit of {max_reads} reads.")
 
 
+def _load_tap_words(path: Path) -> tuple[int, list[int]]:
+    with path.open("rb") as fp:
+        header = fp.read(2)
+        if len(header) != 2:
+            raise RuntimeError(f"{path} is truncated.")
+        length = int.from_bytes(header, "little") & 0x0FFF
+
+        words: list[int] = []
+        for _ in range(length):
+            data = fp.read(2)
+            if len(data) != 2:
+                raise RuntimeError(f"{path} ended unexpectedly.")
+            words.append(int.from_bytes(data, "little") & 0x0FFF)
+        return length, words
+
+
+def test_write_record(
+    lib: ctypes.CDLL,
+    cpu: int,
+    device: int,
+    unit_path: Path,
+    unit: int = 1,
+) -> None:
+    """Write a small record to the specified unit using IOT 6704."""
+
+    unit_path.mkdir(parents=True, exist_ok=True)
+
+    if lib.pdp8_magtape_device_force_new_record(device, ctypes.c_uint(unit)) != 0:
+        raise RuntimeError("Unable to start a fresh record before write test.")
+
+    before_files = {p.resolve() for p in unit_path.glob("*.tap")}
+
+    execute_iot(lib, cpu, MAGTAPE_INSTR_GO, ac=unit)
+    status_word = sense_status(lib, cpu)
+    if status_word & MAGTAPE_STATUS_WRITE_PROTECT:
+        raise RuntimeError("Unit is write-protected; cannot issue IOT 6704.")
+    if status_word & MAGTAPE_STATUS_ERROR:
+        raise RuntimeError("Unit reported an error before write test.")
+
+    words_to_write = [0o01234, 0o04567, 0o07777, 0o00001]
+    for word in words_to_write:
+        execute_iot(lib, cpu, MAGTAPE_INSTR_WRITE, ac=word)
+        status_word = sense_status(lib, cpu)
+        if status_word & MAGTAPE_STATUS_ERROR:
+            raise RuntimeError("Unit reported an error while writing.")
+        if status_word & MAGTAPE_STATUS_EOT:
+            raise RuntimeError("Unexpected end-of-tape while writing.")
+
+    if lib.pdp8_magtape_device_force_new_record(device, ctypes.c_uint(unit)) != 0:
+        raise RuntimeError("Failed to seal written record.")
+
+    after_files = {p.resolve() for p in unit_path.glob("*.tap")}
+    new_files = sorted(after_files - before_files, key=lambda p: p.stat().st_mtime)
+    if not new_files:
+        raise RuntimeError("Write test did not produce a new record file.")
+
+    latest = new_files[-1]
+    length, recorded_words = _load_tap_words(latest)
+    print(f"Wrote {len(words_to_write)} word(s) to {latest.name}")
+    print(f"  Recorded length: {length}")
+    print("  Contents       : " + " ".join(f"{word:04o}" for word in recorded_words))
+    latest.unlink()
+    print("  (record file removed after verification)")
+
 def main() -> int:
     args = parse_args()
 
@@ -378,6 +451,7 @@ def main() -> int:
 
         repo_root = Path(__file__).resolve().parent.parent
         demo_path = (repo_root / "demo").resolve()
+        magtape_path = (repo_root / "magtape").resolve()
         if not demo_path.is_dir():
             print(f"Magtape demo directory not found: {demo_path}", file=sys.stderr)
             return 1
@@ -391,6 +465,15 @@ def main() -> int:
         if lib.pdp8_magtape_device_configure_unit(device, ctypes.byref(params)) != 0:
             print("Failed to configure magtape unit 0.", file=sys.stderr)
             return 1
+
+        if args.command == "write":
+            params = MagtapeUnitParams()
+            params.unit_number = 1
+            params.path = str(magtape_path).encode("utf-8")
+            params.write_protected = False
+            if lib.pdp8_magtape_device_configure_unit(device, ctypes.byref(params)) != 0:
+                print("Failed to configure magtape unit 1.", file=sys.stderr)
+                return 1
 
         status = MagtapeUnitStatus()
         if lib.pdp8_magtape_device_get_status(device, ctypes.c_uint(0), ctypes.byref(status)) != 0:
@@ -415,6 +498,14 @@ def main() -> int:
                 return 0
             except RuntimeError as exc:
                 print(f"Read test failed: {exc}", file=sys.stderr)
+                return 1
+
+        if args.command == "write":
+            try:
+                test_write_record(lib, cpu, device, magtape_path, 1)
+                return 0
+            except RuntimeError as exc:
+                print(f"Write test failed: {exc}", file=sys.stderr)
                 return 1
 
         # Must be seek command
