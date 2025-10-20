@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
@@ -11,6 +13,8 @@
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/paper_tape.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/emulator/magtape_device.h"
+#include <unistd.h>
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
     do {                                                                                               \
@@ -401,6 +405,123 @@ static int test_iot(void) {
     return 1;
 }
 
+static int write_le_word(FILE *fp, uint16_t value) {
+    uint8_t bytes[2];
+    bytes[0] = (uint8_t)(value & 0xFFu);
+    bytes[1] = (uint8_t)((value >> 8) & 0xFFu);
+    return fwrite(bytes, 1u, sizeof bytes, fp) == sizeof bytes;
+}
+
+static int test_magtape_sense_reports_status(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    pdp8_magtape_device_t *device = pdp8_magtape_device_create();
+    if (!device) {
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    if (pdp8_magtape_device_attach(cpu, device) != 0) {
+        pdp8_magtape_device_destroy(device);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    char temp_dir[64];
+    snprintf(temp_dir, sizeof temp_dir, "magtape-test-%ld", (long)getpid());
+    if (mkdir(temp_dir, 0700) != 0) {
+        if (errno == EEXIST) {
+            char stale_path[128];
+            snprintf(stale_path, sizeof stale_path, "%s/sample.tap", temp_dir);
+            remove(stale_path);
+            if (rmdir(temp_dir) != 0 || mkdir(temp_dir, 0700) != 0) {
+                pdp8_magtape_device_destroy(device);
+                pdp8_api_destroy(cpu);
+                return 0;
+            }
+        } else {
+            pdp8_magtape_device_destroy(device);
+            pdp8_api_destroy(cpu);
+            return 0;
+        }
+    }
+
+    char file_path[128];
+    snprintf(file_path, sizeof file_path, "%s/sample.tap", temp_dir);
+    FILE *fp = fopen(file_path, "wb");
+    if (!fp) {
+        rmdir(temp_dir);
+        pdp8_magtape_device_destroy(device);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    if (!write_le_word(fp, 00001u) || !write_le_word(fp, 01234u) ||
+        !write_le_word(fp, 0xFFFFu)) {
+        fclose(fp);
+        remove(file_path);
+        rmdir(temp_dir);
+        pdp8_magtape_device_destroy(device);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+    fclose(fp);
+
+    struct pdp8_magtape_unit_params params;
+    params.unit_number = 0u;
+    params.path = temp_dir;
+    params.write_protected = true;
+    if (pdp8_magtape_device_configure_unit(device, &params) != 0) {
+        remove(file_path);
+        rmdir(temp_dir);
+        pdp8_magtape_device_destroy(device);
+        pdp8_api_destroy(cpu);
+        return 0;
+    }
+
+    struct pdp8_magtape_unit_status host_status;
+    ASSERT_INT_EQ("query magtape status", 0,
+                  pdp8_magtape_device_get_status(device, 0u, &host_status));
+    ASSERT_TRUE("host API reports ready", host_status.ready);
+    ASSERT_TRUE("host API reports write protect", host_status.write_protected);
+
+    pdp8_api_write_mem(cpu, 0000, PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_GO));
+    pdp8_api_write_mem(cpu, 0001, PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_SENSE));
+    pdp8_api_write_mem(cpu, 0002, PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_READ));
+    pdp8_api_write_mem(cpu, 0003, PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_SENSE));
+    ASSERT_EQ("GO instruction", PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_GO),
+              pdp8_api_read_mem(cpu, 0000));
+    ASSERT_EQ("SENSE instruction", PDP8_MAGTAPE_INSTR(PDP8_MAGTAPE_BIT_SENSE),
+              pdp8_api_read_mem(cpu, 0001));
+    pdp8_api_set_ac(cpu, 0000);
+    pdp8_api_set_pc(cpu, 0000);
+
+    ASSERT_INT_EQ("execute GO", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("PC after GO", 0001u, pdp8_api_get_pc(cpu));
+    ASSERT_INT_EQ("execute SENSE", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("PC after SENSE", 0002u, pdp8_api_get_pc(cpu));
+    uint16_t sense_ready = pdp8_api_get_ac(cpu);
+    ASSERT_TRUE("READY flag set", (sense_ready & 00001u) != 0u);
+    ASSERT_TRUE("WRITE PROTECT flag set", (sense_ready & 00020u) != 0u);
+
+    ASSERT_INT_EQ("execute READ", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("read data word", 01234u, pdp8_api_get_ac(cpu));
+
+    ASSERT_INT_EQ("execute SENSE after read", 1, pdp8_api_step(cpu));
+    uint16_t sense_eor = pdp8_api_get_ac(cpu);
+    ASSERT_TRUE("EOR flag set", (sense_eor & 00004u) != 0u);
+    ASSERT_TRUE("EOT flag set", (sense_eor & 00010u) != 0u);
+
+    remove(file_path);
+    rmdir(temp_dir);
+    pdp8_magtape_device_destroy(device);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_clear_halt(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
     if (!cpu) {
@@ -763,6 +884,7 @@ int main(int argc, char **argv) {
         {"operate group 1", test_operate_group1},
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},
+        {"magtape sense", test_magtape_sense_reports_status},
         {"clear halt", test_clear_halt},
         {"kl8e console", test_kl8e_console},
         {"line printer", test_line_printer},
