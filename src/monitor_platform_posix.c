@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -24,6 +25,41 @@ static FILE *s_printer_output = NULL;
 static bool s_close_console_input = false;
 static bool s_close_console_output = false;
 static bool s_close_printer_output = false;
+
+static bool parse_boolean(const char *text, bool *out_value) {
+    if (!text || !out_value) {
+        return false;
+    }
+    if (strcasecmp(text, "true") == 0 || strcasecmp(text, "yes") == 0 || strcmp(text, "1") == 0) {
+        *out_value = true;
+        return true;
+    }
+    if (strcasecmp(text, "false") == 0 || strcasecmp(text, "no") == 0 || strcmp(text, "0") == 0) {
+        *out_value = false;
+        return true;
+    }
+    return false;
+}
+
+static struct monitor_magtape_unit_config *
+find_or_create_magtape_slot(struct monitor_config *config, int unit_number) {
+    if (!config) {
+        return NULL;
+    }
+    for (size_t i = 0; i < config->magtape_unit_count; ++i) {
+        if (config->magtape_units[i].unit_number == unit_number) {
+            return &config->magtape_units[i];
+        }
+    }
+    if (config->magtape_unit_count >= MONITOR_MAX_MAGTAPE_UNITS) {
+        return NULL;
+    }
+    size_t index = config->magtape_unit_count++;
+    struct monitor_magtape_unit_config *slot = &config->magtape_units[index];
+    memset(slot, 0, sizeof(*slot));
+    slot->unit_number = unit_number;
+    return slot;
+}
 
 static char *trim_whitespace(char *text) {
     if (!text) {
@@ -57,6 +93,7 @@ static int monitor_config_load_file(const char *path, struct monitor_config *con
 
     char line[512];
     char current_device[64] = {0};
+    struct monitor_magtape_unit_config *current_magtape = NULL;
     while (fgets(line, sizeof line, fp) != NULL) {
         char *hash = strchr(line, '#');
         if (hash) {
@@ -90,13 +127,30 @@ static int monitor_config_load_file(const char *path, struct monitor_config *con
             }
             if (*cursor != '{') {
                 current_device[0] = '\0';
+                current_magtape = NULL;
                 continue;
+            }
+            if (strncmp(current_device, "magtape", 7) == 0) {
+                const char *unit_str = current_device + 7;
+                char *endptr = NULL;
+                long parsed_unit = strtol(unit_str, &endptr, 10);
+                if (endptr && *endptr == '\0' && parsed_unit >= 0 && parsed_unit <= INT_MAX) {
+                    current_magtape = find_or_create_magtape_slot(config, (int)parsed_unit);
+                    if (current_magtape) {
+                        current_magtape->unit_number = (int)parsed_unit;
+                    }
+                } else {
+                    current_magtape = NULL;
+                }
+            } else {
+                current_magtape = NULL;
             }
             continue;
         }
 
         if (strcmp(trimmed, "}") == 0) {
             current_device[0] = '\0';
+            current_magtape = NULL;
             continue;
         }
 
@@ -163,6 +217,28 @@ static int monitor_config_load_file(const char *path, struct monitor_config *con
                 if (monitor_config_set_string(&config->paper_tape_image, value) != 0) {
                     fclose(fp);
                     return -1;
+                }
+            }
+        } else if (strncmp(current_device, "magtape", 7) == 0) {
+            struct monitor_magtape_unit_config *slot = current_magtape;
+            if (!slot) {
+                continue;
+            }
+            slot->present = true;
+            if (strcmp(key, "unit") == 0) {
+                long parsed = strtol(value, NULL, 10);
+                if (parsed >= 0 && parsed <= INT_MAX) {
+                    slot->unit_number = (int)parsed;
+                }
+            } else if (strcmp(key, "path") == 0) {
+                if (monitor_config_set_string(&slot->path, value) != 0) {
+                    fclose(fp);
+                    return -1;
+                }
+            } else if (strcmp(key, "write_protected") == 0) {
+                bool flag = false;
+                if (parse_boolean(value, &flag)) {
+                    slot->write_protected = flag;
                 }
             }
         }

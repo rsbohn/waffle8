@@ -17,6 +17,10 @@ void monitor_config_clear(struct monitor_config *config) {
     if (!config) {
         return;
     }
+    for (size_t i = 0; i < config->magtape_unit_count && i < MONITOR_MAX_MAGTAPE_UNITS; ++i) {
+        free(config->magtape_units[i].path);
+        config->magtape_units[i].path = NULL;
+    }
     free(config->kl8e_keyboard_iot);
     free(config->kl8e_keyboard_input);
     free(config->kl8e_teleprinter_iot);

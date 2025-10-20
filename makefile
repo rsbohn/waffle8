@@ -10,7 +10,8 @@ MONITOR_OBJS = tools/monitor.c \
         src/emulator/kl8e_console.c \
         src/emulator/line_printer.c \
         src/emulator/paper_tape.c \
-        src/emulator/paper_tape_device.c
+        src/emulator/paper_tape_device.c \
+        src/emulator/magtape_device.c
 
 PDP8_BENCH_OBJS = tools/pdp8_bench.c \
 	src/emulator/main.c \
@@ -18,7 +19,8 @@ PDP8_BENCH_OBJS = tools/pdp8_bench.c \
 	src/emulator/kl8e_console.c \
 	src/emulator/line_printer.c \
 	src/emulator/paper_tape.c \
-	src/emulator/paper_tape_device.c
+	src/emulator/paper_tape_device.c \
+	src/emulator/magtape_device.c
 
 FACTORY_LIB = factory/libpdp8.so
 FACTORY_SOURCES = $(wildcard src/emulator/*.c)

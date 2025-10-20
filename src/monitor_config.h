@@ -2,6 +2,16 @@
 #define MONITOR_CONFIG_H
 
 #include <stdbool.h>
+#include <stddef.h>
+
+#define MONITOR_MAX_MAGTAPE_UNITS 8u
+
+struct monitor_magtape_unit_config {
+    bool present;
+    int unit_number;
+    char *path;
+    bool write_protected;
+};
 
 struct monitor_config {
     bool kl8e_present;
@@ -18,6 +28,9 @@ struct monitor_config {
     bool paper_tape_present;
     char *paper_tape_iot;
     char *paper_tape_image;
+
+    size_t magtape_unit_count;
+    struct monitor_magtape_unit_config magtape_units[MONITOR_MAX_MAGTAPE_UNITS];
 };
 
 void monitor_config_init(struct monitor_config *config);

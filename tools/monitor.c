@@ -9,12 +9,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/kl8e_console.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/emulator/magtape_device.h"
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
 
@@ -23,6 +26,7 @@ struct monitor_runtime {
     pdp8_kl8e_console_t *console;
     pdp8_line_printer_t *printer;
     pdp8_paper_tape_device_t *paper_tape;
+    pdp8_magtape_device_t *magtape;
     struct monitor_config config;
     bool config_loaded;
     size_t memory_words;
@@ -137,6 +141,57 @@ static void show_devices(const struct monitor_config *config,
     } else {
         monitor_console_printf("    image            : %s\n", paper_tape_image);
         monitor_console_puts("    status           : (not attached)");
+    }
+}
+
+static void show_magtape(const struct monitor_runtime *runtime) {
+    if (!runtime) {
+        return;
+    }
+    if (!runtime->magtape) {
+        monitor_console_puts("Magtape: (device not attached).");
+        return;
+    }
+
+    bool any = false;
+    for (unsigned unit = 0; unit < MONITOR_MAX_MAGTAPE_UNITS; ++unit) {
+        struct pdp8_magtape_unit_status status;
+        if (pdp8_magtape_device_get_status(runtime->magtape, unit, &status) != 0) {
+            continue;
+        }
+        if (!status.configured) {
+            continue;
+        }
+        any = true;
+        monitor_console_printf("Unit %u (%s)\n",
+                               status.unit_number,
+                               status.write_protected ? "read-only" : "read/write");
+        monitor_console_printf("  path            : %s\n",
+                               status.path ? status.path : "(unconfigured)");
+        if (status.current_record) {
+            monitor_console_printf("  current record  : %s\n", status.current_record);
+            if (status.word_count > 0u) {
+                monitor_console_printf("  position        : %zu / %zu word(s)%s\n",
+                                       status.word_position,
+                                       status.word_count,
+                                       status.partial_record ? " (partial)" : "");
+            } else {
+                monitor_console_printf("  position        : %zu word(s)%s\n",
+                                       status.word_position,
+                                       status.partial_record ? " (partial)" : "");
+            }
+        } else {
+            monitor_console_puts("  current record  : (none)");
+        }
+        monitor_console_printf("  ready=%s eor=%s eot=%s error=%s\n",
+                               status.ready ? "yes" : "no",
+                               status.end_of_record ? "yes" : "no",
+                               status.end_of_tape ? "yes" : "no",
+                               status.error ? "yes" : "no");
+    }
+
+    if (!any) {
+        monitor_console_puts("Magtape: no configured units.");
     }
 }
 
@@ -464,6 +519,8 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
+static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
+                                                  char **state);
 static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
                                                  char **state);
 static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
@@ -483,6 +540,11 @@ static const struct monitor_command monitor_commands[] = {
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
     {"read", command_read, "read <file>", "Load Motorola S-record image.", true},
     {"show", command_show, "show devices", "Display configured peripherals.", true},
+    {"magtape",
+     command_magtape,
+     "magtape <rewind|new> <unit>",
+     "Control magnetic tape units (see 'show magtape').",
+     true},
     {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
 };
 
@@ -873,7 +935,65 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
         return MONITOR_COMMAND_OK;
     }
 
+    if (strcmp(topic, "magtape") == 0) {
+        show_magtape(runtime);
+        return MONITOR_COMMAND_OK;
+    }
+
     monitor_console_printf("Unknown subject for show: '%s'.\n", topic);
+    return MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
+                                                  char **state) {
+    if (!runtime) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->magtape) {
+        monitor_console_puts("No magnetic tape device is attached.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *action = command_next_token(state);
+    if (!action) {
+        monitor_console_puts("magtape requires an action (rewind|new).");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *unit_tok = command_next_token(state);
+    if (!unit_tok) {
+        monitor_console_puts("magtape requires a unit number.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    long unit_value = 0;
+    if (parse_number(unit_tok, &unit_value) != 0 || unit_value < 0 || unit_value > INT_MAX) {
+        monitor_console_printf("Invalid unit '%s'.\n", unit_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    unsigned unit = (unsigned)unit_value;
+
+    if (strcmp(action, "rewind") == 0) {
+        if (pdp8_magtape_device_rewind(runtime->magtape, unit) != 0) {
+            monitor_console_printf("Unable to rewind magtape unit %u.\n", unit);
+            return MONITOR_COMMAND_ERROR;
+        }
+        monitor_console_printf("Magtape unit %u rewound.\n", unit);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(action, "new") == 0) {
+        if (pdp8_magtape_device_force_new_record(runtime->magtape, unit) != 0) {
+            monitor_console_printf("Unable to seal current record for unit %u.\n", unit);
+            return MONITOR_COMMAND_ERROR;
+        }
+        monitor_console_printf("Magtape unit %u will create a new record on next write.\n", unit);
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_console_printf("Unknown magtape action '%s'.\n", action);
     return MONITOR_COMMAND_ERROR;
 }
 
@@ -945,6 +1065,10 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
 static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
     if (!runtime) {
         return;
+    }
+    if (runtime->magtape) {
+        pdp8_magtape_device_destroy(runtime->magtape);
+        runtime->magtape = NULL;
     }
     if (runtime->paper_tape) {
         pdp8_paper_tape_device_destroy(runtime->paper_tape);
@@ -1076,6 +1200,95 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         } else {
             monitor_console_puts(
                 "Warning: paper_tape device requested but no image path provided in pdp8.config.");
+        }
+    }
+
+    bool need_magtape = runtime->config.magtape_unit_count > 0u || !runtime->config_loaded;
+    if (need_magtape) {
+        runtime->magtape = pdp8_magtape_device_create();
+        if (!runtime->magtape) {
+            monitor_console_puts("Warning: unable to create magtape controller.");
+        } else if (pdp8_magtape_device_attach(runtime->cpu, runtime->magtape) != 0) {
+            monitor_console_puts("Warning: unable to attach magtape controller IOT.");
+            pdp8_magtape_device_destroy(runtime->magtape);
+            runtime->magtape = NULL;
+        } else {
+            bool configured = false;
+            if (runtime->config.magtape_unit_count > 0u) {
+                for (size_t i = 0; i < runtime->config.magtape_unit_count; ++i) {
+                    const struct monitor_magtape_unit_config *slot = &runtime->config.magtape_units[i];
+                    if (!slot->present) {
+                        continue;
+                    }
+                    if (!slot->path || *slot->path == '\0') {
+                        monitor_console_printf(
+                            "Warning: magtape unit %d missing path in configuration.\n", slot->unit_number);
+                        continue;
+                    }
+                    if (!slot->write_protected) {
+                        struct stat st;
+                        if (stat(slot->path, &st) != 0) {
+                            if (mkdir(slot->path, 0755) != 0 && errno != EEXIST) {
+                                monitor_console_printf(
+                                    "Warning: unable to create magtape directory '%s': %s\n",
+                                    slot->path,
+                                    strerror(errno));
+                                continue;
+                            }
+                        } else if (!S_ISDIR(st.st_mode)) {
+                            monitor_console_printf(
+                                "Warning: magtape path '%s' is not a directory.\n", slot->path);
+                            continue;
+                        }
+                    }
+                    struct pdp8_magtape_unit_params params;
+                    params.unit_number = (unsigned)slot->unit_number;
+                    params.path = slot->path;
+                    params.write_protected = slot->write_protected;
+                    if (pdp8_magtape_device_configure_unit(runtime->magtape, &params) != 0) {
+                        monitor_console_printf("Warning: failed to configure magtape unit %u.\n",
+                                               params.unit_number);
+                    } else {
+                        configured = true;
+                    }
+                }
+            } else {
+                static const struct pdp8_magtape_unit_params defaults[] = {
+                    {0u, "demo", true},
+                    {1u, "magtape", false},
+                };
+                for (size_t i = 0; i < sizeof defaults / sizeof defaults[0]; ++i) {
+                    const struct pdp8_magtape_unit_params *params = &defaults[i];
+                    if (!params->write_protected) {
+                        struct stat st;
+                        if (stat(params->path, &st) != 0) {
+                            if (mkdir(params->path, 0755) != 0 && errno != EEXIST) {
+                                monitor_console_printf(
+                                    "Warning: unable to create magtape directory '%s': %s\n",
+                                    params->path,
+                                    strerror(errno));
+                                continue;
+                            }
+                        } else if (!S_ISDIR(st.st_mode)) {
+                            monitor_console_printf(
+                                "Warning: magtape path '%s' is not a directory.\n", params->path);
+                            continue;
+                        }
+                    }
+                    if (pdp8_magtape_device_configure_unit(runtime->magtape, params) != 0) {
+                        monitor_console_printf("Warning: failed to configure default magtape unit %u.\n",
+                                               params->unit_number);
+                    } else {
+                        configured = true;
+                    }
+                }
+            }
+
+            if (!configured) {
+                monitor_console_puts("Warning: no magtape units available; disabling controller.");
+                pdp8_magtape_device_destroy(runtime->magtape);
+                runtime->magtape = NULL;
+            }
         }
     }
 
