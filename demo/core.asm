@@ -6,37 +6,15 @@
 // 0005: BIOS selector (opcode)
 // 0006: VPTR 
 // 0007: COUNTER (counts BIOS calls)
-/
-/ Assembler note: Use '* address' to set location counter (not ORG)
-
-    * 6700
-/ run 6700 2000
-CORETEST,
-    JMS I INIT_PTR
-    CLA CLL
-    TAD OP3
-    DCA 0005
-    TAD S_PTR
-    DCA 0006
-    JMS 0002
-    HLT
-
-INIT_PTR,
-    INIT
-S_PTR,
-    TEST_STRING
-OP3,    03
-
 
     * 7000
 INIT,
-    0
     CLA CLL
     TAD JMP_I_INSTR / Load "JMP I 0004" instruction
     DCA 0003        / Store at 0003
     TAD DISPATCH_ADDR / Load DISPATCH address
     DCA 0004        / Store dispatch pointer at 0004
-    JMP I INIT
+    HLT
 
 JMP_I_INSTR, 5404   / JMP I 0004 instruction (5400 + 0004)
 DISPATCH_ADDR, DISPATCH / Address of dispatch routine
@@ -67,8 +45,7 @@ DTABLE,
     PRN_PUTCH               / 0 - Printer output
     KL8E_GETCH              / 1 - KL8E keyboard input
     KL8E_PUTCH              / 2 - KL8E teleprinter output
-    KL8E_PUTS               / 3 - KL8E string output
-    CRASH                   / 4 - Unused
+    CRASH                   / 3 - Unused
 
 PRN_PUTCH,
     0                       / Return address
@@ -98,41 +75,3 @@ TPR_WAIT,
     TAD 0006                / Get the vptr as a simple value (updated to 0006)
     IOT 6046                / TLS: Clear flag + transmit character
     JMP I KL8E_PUTCH        / Return
-
-CHARMASK,       0377
-MINUS_ONE,      7777        / -1 in two's complement
-KL8E_PUTS,
-    0
-    CLA CLL
-    TAD 0006                / a string pointer
-    TAD MINUS_ONE           / subtract 1
-    DCA 0010
-KPS_LOOP,
-    CLA CLL                 / Clear accumulator and link
-    TAD I 0010              / get a word (character)
-    AND CHARMASK            / AND AC with character mask
-    SNA
-    JMP I KL8E_PUTS         / we're done
-    DCA 0006                / Store character in 0006 for KL8E_PUTCH
-    JMS KL8E_PUTCH
-    JMP KPS_LOOP
-
-/ String data at 7700
-    * 7700
-TEST_STRING,
-    0110                    / 'H'
-    0145                    / 'e'
-    0154                    / 'l'
-    0154                    / 'l'
-    0157                    / 'o'
-    0054                    / ','
-    0040                    / ' '
-    0127                    / 'W'
-    0157                    / 'o'
-    0162                    / 'r'
-    0154                    / 'l'
-    0144                    / 'd'
-    0041                    / '!'
-    015                     / CR
-    012                     / LF
-    0                       / null terminator
