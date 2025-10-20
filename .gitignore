@@ -10,3 +10,5 @@ unit
 __pycache__
 monitor
 checkpoint/*
+magtape/*
+tests/pdp8_tests
