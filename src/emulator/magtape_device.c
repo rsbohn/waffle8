@@ -527,7 +527,7 @@ static int reload_manifest(struct magtape_unit *unit) {
 
     struct dirent *entry = NULL;
     while ((entry = readdir(dir)) != NULL) {
-        if (!entry->d_name || entry->d_name[0] == '.') {
+        if (entry->d_name[0] == '.') {
             continue;
         }
         char *full_path = join_path(unit->path, entry->d_name);
@@ -847,7 +847,13 @@ int pdp8_magtape_device_attach(pdp8_t *cpu, pdp8_magtape_device_t *device) {
     if (!cpu || !device) {
         return -1;
     }
-    return pdp8_api_register_iot(cpu, (uint8_t)PDP8_MAGTAPE_DEVICE_CODE, magtape_device_iot, device);
+    static const uint8_t device_codes[] = {070u, 071u, 072u, 073u, 074u, 075u, 076u, 077u};
+    for (size_t i = 0; i < sizeof(device_codes) / sizeof(device_codes[0]); ++i) {
+        if (pdp8_api_register_iot(cpu, device_codes[i], magtape_device_iot, device) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int pdp8_magtape_device_configure_unit(pdp8_magtape_device_t *device,
