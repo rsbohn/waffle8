@@ -22,6 +22,7 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -77,6 +78,7 @@ class Statement:
     args: Tuple
     line_no: int
     text: str
+    raw: str
 
 
 class PDP8Assembler:
@@ -84,6 +86,7 @@ class PDP8Assembler:
         self.lines = list(lines)
         self.symbols: Dict[str, int] = {}
         self.statements: List[Statement] = []
+        self.origins: List[int] = []
 
     @staticmethod
     def _strip_comment(text: str) -> str:
@@ -118,6 +121,8 @@ class PDP8Assembler:
                     location = int(stripped[1:], 8)
                 except ValueError as exc:
                     raise AsmError(f"Invalid origin directive: {stripped}", line_no) from exc
+                if not self.origins or self.origins[-1] != location:
+                    self.origins.append(location)
                 continue
 
             label = None
@@ -138,10 +143,12 @@ class PDP8Assembler:
 
             parts = [part.strip() for part in rest.split(";") if part.strip()]
             for part in parts:
+                if not self.origins:
+                    self.origins.append(location)
                 if part.startswith('"') and part.endswith('"') and len(part) >= 2:
                     value = ord(part[1:-1]) & 0x7F
                     self.statements.append(
-                        Statement("data", location, (value,), line_no, part)
+                        Statement("data", location, (value,), line_no, part, raw.rstrip("\n"))
                     )
                     location += 1
                     continue
@@ -169,6 +176,7 @@ class PDP8Assembler:
                             (op, indirect, operand_token),
                             line_no,
                             part,
+                            raw.rstrip("\n"),
                         )
                     )
                     location += 1
@@ -178,7 +186,7 @@ class PDP8Assembler:
                     if len(tokens) != 2:
                         raise AsmError("IOT requires a single numeric operand", line_no, part)
                     self.statements.append(
-                        Statement("iot", location, (tokens[1],), line_no, part)
+                        Statement("iot", location, (tokens[1],), line_no, part, raw.rstrip("\n"))
                     )
                     location += 1
                     continue
@@ -186,7 +194,14 @@ class PDP8Assembler:
                 if op in GROUP1_BITS or op in GROUP2_BITS or op in {"SNA", "SPA", "SZL"}:
                     group_tokens = upper_tokens
                     self.statements.append(
-                        Statement("operate", location, tuple(group_tokens), line_no, part)
+                        Statement(
+                            "operate",
+                            location,
+                            tuple(group_tokens),
+                            line_no,
+                            part,
+                            raw.rstrip("\n"),
+                        )
                     )
                     location += 1
                     continue
@@ -197,11 +212,11 @@ class PDP8Assembler:
                 except ValueError:
                     symbol = tokens[0]
                     self.statements.append(
-                        Statement("data_symbol", location, (symbol,), line_no, part)
+                        Statement("data_symbol", location, (symbol,), line_no, part, raw.rstrip("\n"))
                     )
                 else:
                     self.statements.append(
-                        Statement("data", location, (value,), line_no, part)
+                        Statement("data", location, (value,), line_no, part, raw.rstrip("\n"))
                     )
                 location += 1
 
@@ -214,92 +229,103 @@ class PDP8Assembler:
                 raise AsmError(f"Unknown symbol '{token}'", line_no, text)
             return self.symbols[name]
 
+    def _assemble_statement(self, stmt: Statement) -> int:
+        if stmt.kind == "data":
+            return stmt.args[0] & 0x0FFF
+
+        if stmt.kind == "data_symbol":
+            symbol_token = stmt.args[0]
+            value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text)
+            return value & 0x0FFF
+
+        if stmt.kind == "iot":
+            value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text)
+            return value & 0x0FFF
+
+        if stmt.kind == "mem":
+            op, indirect, operand_token = stmt.args
+            opcode = MEMREF_OPS[op]
+            operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text)
+
+            current_page = stmt.address // 0o200
+            if operand_addr < 0o200:
+                page_bit = 0
+                offset = operand_addr
+            else:
+                operand_page = operand_addr // 0o200
+                if operand_page != current_page:
+                    raise AsmError(
+                        f"Operand '{operand_token}' out of range for direct addressing",
+                        stmt.line_no,
+                        stmt.text,
+                    )
+                page_bit = 1
+                offset = operand_addr & 0o177
+            word = opcode | (0o400 if indirect else 0) | (page_bit << 7) | offset
+            return word & 0x0FFF
+
+        if stmt.kind == "operate":
+            tokens = list(stmt.args)
+            group1_possible = all(tok in GROUP1_BITS for tok in tokens)
+            group2_candidate = any(tok in GROUP2_BITS or tok in {"SNA", "SPA", "SZL"} for tok in tokens)
+
+            if group2_candidate and not group1_possible:
+                bits = 0
+                for tok in tokens:
+                    if tok == "SNA":
+                        bits |= GROUP2_BITS["SZA"] | SENSE_BIT
+                    elif tok == "SPA":
+                        bits |= GROUP2_BITS["SMA"] | SENSE_BIT
+                    elif tok == "SZL":
+                        bits |= GROUP2_BITS["SNL"] | SENSE_BIT
+                    elif tok == "CLA":
+                        bits |= GROUP2_BITS["CLA"]
+                    elif tok == "OSR":
+                        bits |= GROUP2_BITS["OSR"]
+                    elif tok == "HLT":
+                        bits |= GROUP2_BITS["HLT"]
+                    elif tok in GROUP2_BITS:
+                        bits |= GROUP2_BITS[tok]
+                    elif tok == "SNS":
+                        bits |= SENSE_BIT
+                    else:
+                        raise AsmError(f"Unsupported group 2 op '{tok}'", stmt.line_no, stmt.text)
+                word = 0o7400 | bits
+                return word & 0x0FFF
+
+            bits = 0
+            for tok in tokens:
+                if tok not in GROUP1_BITS:
+                    raise AsmError(f"Unsupported group 1 op '{tok}'", stmt.line_no, stmt.text)
+                bits |= GROUP1_BITS[tok]
+            word = 0o7000 | bits
+            return word & 0x0FFF
+
+        raise AsmError(f"Unhandled statement type '{stmt.kind}'", stmt.line_no, stmt.text)
+
     def second_pass(self) -> Dict[int, int]:
         memory: Dict[int, int] = {}
         for stmt in self.statements:
-            if stmt.kind == "data":
-                value = stmt.args[0] & 0x0FFF
-                memory[stmt.address] = value
-                continue
-
-            if stmt.kind == "data_symbol":
-                symbol_token = stmt.args[0]
-                value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text) & 0x0FFF
-                memory[stmt.address] = value
-                continue
-
-            if stmt.kind == "iot":
-                value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text)
-                memory[stmt.address] = value & 0x0FFF
-                continue
-
-            if stmt.kind == "mem":
-                op, indirect, operand_token = stmt.args
-                opcode = MEMREF_OPS[op]
-                operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text)
-
-                current_page = stmt.address // 0o200
-                if operand_addr < 0o200:
-                    page_bit = 0
-                    offset = operand_addr
-                else:
-                    operand_page = operand_addr // 0o200
-                    if operand_page != current_page:
-                        raise AsmError(
-                            f"Operand '{operand_token}' out of range for direct addressing",
-                            stmt.line_no,
-                            stmt.text,
-                        )
-                    page_bit = 1
-                    offset = operand_addr & 0o177
-                word = opcode | (0o400 if indirect else 0) | (page_bit << 7) | offset
-                memory[stmt.address] = word & 0x0FFF
-                continue
-
-            if stmt.kind == "operate":
-                tokens = list(stmt.args)
-                group1_possible = all(tok in GROUP1_BITS for tok in tokens)
-                group2_candidate = any(tok in GROUP2_BITS or tok in {"SNA", "SPA", "SZL"} for tok in tokens)
-
-                if group2_candidate and not group1_possible:
-                    # Group 2
-                    bits = 0
-                    for tok in tokens:
-                        if tok == "SNA":
-                            bits |= GROUP2_BITS["SZA"] | SENSE_BIT
-                        elif tok == "SPA":
-                            bits |= GROUP2_BITS["SMA"] | SENSE_BIT
-                        elif tok == "SZL":
-                            bits |= GROUP2_BITS["SNL"] | SENSE_BIT
-                        elif tok == "CLA":
-                            bits |= GROUP2_BITS["CLA"]
-                        elif tok == "OSR":
-                            bits |= GROUP2_BITS["OSR"]
-                        elif tok == "HLT":
-                            bits |= GROUP2_BITS["HLT"]
-                        elif tok in GROUP2_BITS:
-                            bits |= GROUP2_BITS[tok]
-                        elif tok == "SNS":
-                            bits |= SENSE_BIT
-                        else:
-                            raise AsmError(f"Unsupported group 2 op '{tok}'", stmt.line_no, stmt.text)
-                    word = 0o7400 | bits
-                    memory[stmt.address] = word & 0x0FFF
-                    continue
-
-                # Group 1 (default)
-                bits = 0
-                for tok in tokens:
-                    if tok not in GROUP1_BITS:
-                        raise AsmError(f"Unsupported group 1 op '{tok}'", stmt.line_no, stmt.text)
-                    bits |= GROUP1_BITS[tok]
-                word = 0o7000 | bits
-                memory[stmt.address] = word & 0x0FFF
-                continue
-
-            raise AsmError(f"Unhandled statement type '{stmt.kind}'", stmt.line_no, stmt.text)
+            word = self._assemble_statement(stmt)
+            memory[stmt.address] = word & 0x0FFF
 
         return memory
+
+    def assemble_listing(self) -> Tuple[Dict[int, int], List[Tuple[Statement, Optional[int], Optional[AsmError]]], List[AsmError]]:
+        memory: Dict[int, int] = {}
+        rows: List[Tuple[Statement, Optional[int], Optional[AsmError]]] = []
+        errors: List[AsmError] = []
+        for stmt in self.statements:
+            try:
+                word = self._assemble_statement(stmt)
+            except AsmError as exc:
+                errors.append(exc)
+                rows.append((stmt, None, exc))
+                continue
+            word &= 0x0FFF
+            memory[stmt.address] = word
+            rows.append((stmt, word, None))
+        return memory, rows, errors
 
 
 def words_to_srec(memory: Dict[int, int], start_address: int) -> List[str]:
@@ -354,6 +380,69 @@ def words_to_srec(memory: Dict[int, int], start_address: int) -> List[str]:
     return records
 
 
+def _write_srec(assembler: PDP8Assembler, memory: Dict[int, int], output: Path) -> None:
+    if not memory:
+        raise AsmError("No output generated; empty program?")
+    start_addr = assembler.symbols.get("START", min(memory))
+    records = words_to_srec(memory, start_addr)
+    try:
+        output.write_text("\n".join(records) + "\n")
+    except OSError as exc:
+        raise AsmError(f"Unable to write {output}: {exc}")
+
+
+def render_listing(
+    source: Path,
+    assembler: PDP8Assembler,
+    rows: Sequence[Tuple[Statement, Optional[int], Optional[AsmError]]],
+    errors: Sequence[AsmError],
+) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    origins = assembler.origins if assembler.origins else [0]
+    origin_text = ", ".join(f"{origin:04o}" for origin in origins)
+
+    header = [
+        "PDP-8 Assembly Listing",
+        f"Source: {source}",
+        f"Assembled: {timestamp}",
+        f"Origins: {origin_text}",
+        "",
+        "ADDR  WORD  SYMBOL/OPCODE      ; SOURCE",
+        "----  ----  ------------------  ----------------------------------------",
+    ]
+
+    body: List[str] = []
+    for stmt, word, error in rows:
+        word_field = f"{word:04o}" if word is not None else "????"
+        if stmt.kind == "mem":
+            symbol_field = stmt.args[0]
+        elif stmt.kind == "operate":
+            symbol_field = stmt.args[0] if stmt.args else ""
+        elif stmt.kind == "iot":
+            symbol_field = "IOT"
+        elif stmt.kind == "data_symbol":
+            symbol_field = stmt.args[0].upper()
+        elif stmt.kind == "data":
+            symbol_field = stmt.text.strip() or f"{stmt.args[0]:04o}"
+        else:
+            symbol_field = stmt.text.strip()
+        symbol_field = symbol_field[:18]
+        source_text = stmt.raw.rstrip() if stmt.raw else stmt.text
+        line = f"{stmt.address:04o}  {word_field:>4}  {symbol_field:<18}  ; {source_text.rstrip()}"
+        if error is not None:
+            line += f"  <<< ERROR: {error}"
+        body.append(line)
+
+    totals_line = f"Totals: {sum(1 for _, word, _ in rows if word is not None)} words, {len(errors)} errors"
+    footer: List[str] = ["", totals_line]
+    if errors:
+        footer.append("Errors:")
+        for err in errors:
+            footer.append(f"  - {err}")
+
+    return "\n".join(header + body + footer)
+
+
 def assemble(path: Path, output: Path) -> None:
     try:
         lines = path.read_text().splitlines()
@@ -363,25 +452,76 @@ def assemble(path: Path, output: Path) -> None:
     assembler = PDP8Assembler(lines)
     assembler.first_pass()
     memory = assembler.second_pass()
-    if not memory:
-        raise AsmError("No output generated; empty program?")
-    # Prefer an explicit START label for the entry point; fall back to the lowest word.
-    start_addr = assembler.symbols.get("START", min(memory))
-    records = words_to_srec(memory, start_addr)
-    try:
-        output.write_text("\n".join(records) + "\n")
-    except OSError as exc:
-        raise AsmError(f"Unable to write {output}: {exc}")
+    _write_srec(assembler, memory, output)
 
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Assemble PDP-8 PAL-style source to S-records.")
-    parser.add_argument("source", type=Path)
-    parser.add_argument("output", type=Path)
+    parser.add_argument("source", type=Path, help="Input assembly file")
+    parser.add_argument("output", type=Path, nargs="?", help="Output S-record file")
+    parser.add_argument("-o", "--output", dest="output_path", type=Path, help="Explicit S-record output path")
+    parser.add_argument("--list", action="store_true", help="Emit a human-readable listing to STDOUT")
+    parser.add_argument("--list-only", action="store_true", help="Generate listing without writing S-records")
     args = parser.parse_args(argv)
 
+    if args.list_only and not args.list:
+        parser.error("--list-only requires --list")
+
+    # The positional 'output' and '--output' are mutually exclusive in practice.
+    # No need to check for both being set.
+
+    output_path: Optional[Path] = args.output_path or args.output
+
+    if args.list:
+        try:
+            lines = args.source.read_text().splitlines()
+        except OSError as exc:
+            print(f"Unable to read {args.source}: {exc}", file=sys.stderr)
+            return 1
+
+        assembler = PDP8Assembler(lines)
+        listing_rows: List[Tuple[Statement, Optional[int], Optional[AsmError]]] = []
+        errors: List[AsmError] = []
+        try:
+            assembler.first_pass()
+        except AsmError as exc:
+            errors.append(exc)
+
+        memory: Dict[int, int] = {}
+        if not errors:
+            memory, listing_rows, pass_errors = assembler.assemble_listing()
+            errors.extend(pass_errors)
+
+        listing_text = render_listing(args.source, assembler, listing_rows, errors)
+        print(listing_text)
+
+        if errors:
+            return 1
+
+        if args.list_only:
+            return 0
+
+        if output_path is None:
+            if args.source.suffix:
+                output_path = args.source.with_suffix(".srec")
+            else:
+                output_path = Path(str(args.source) + ".srec")
+
+        try:
+            _write_srec(assembler, memory, output_path)
+        except AsmError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        except OSError as exc:
+            print(f"Unable to write {output_path}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if output_path is None:
+        parser.error("Output path required unless --list is specified")
+
     try:
-        assemble(args.source, args.output)
+        assemble(args.source, output_path)
     except AsmError as exc:
         print(exc, file=sys.stderr)
         return 1
