@@ -503,6 +503,8 @@ static enum monitor_command_status command_quit(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_regs(struct monitor_runtime *runtime,
                                                 char **state);
+static enum monitor_command_status command_switch(struct monitor_runtime *runtime,
+                                                 char **state);
 static enum monitor_command_status command_mem(struct monitor_runtime *runtime,
                                                char **state);
 static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
@@ -531,6 +533,11 @@ static const struct monitor_command monitor_commands[] = {
     {"quit", command_quit, "quit", "Exit the monitor.", true},
     {"exit", command_quit, "exit", "Exit the monitor (alias of quit).", false},
     {"regs", command_regs, "regs", "Show registers and halt state.", true},
+    {"switch",
+     command_switch,
+     "switch [value|load [value]]",
+     "Show/set the front-panel switch register; 'load' copies it to PC.",
+     true},
     {"mem", command_mem, "mem <addr> [count]", "Dump memory words (octal).", true},
     {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
@@ -636,6 +643,61 @@ static enum monitor_command_status command_regs(struct monitor_runtime *runtime,
                            link & 0x1u,
                            sw & 0x0FFFu,
                            halted ? "yes" : "no");
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_switch(struct monitor_runtime *runtime,
+                                                 char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *first = command_next_token(state);
+    if (!first) {
+        uint16_t current = pdp8_api_get_switch_register(runtime->cpu) & 0x0FFFu;
+        monitor_console_printf("Switch register: %04o\n", current);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(first, "load") == 0) {
+        uint16_t value = pdp8_api_get_switch_register(runtime->cpu) & 0x0FFFu;
+
+        char *value_tok = command_next_token(state);
+        if (value_tok) {
+            long parsed = 0;
+            if (parse_number(value_tok, &parsed) != 0 || parsed < 0 || parsed > 0x0FFF) {
+                monitor_console_printf("Invalid switch value '%s'.\n", value_tok);
+                return MONITOR_COMMAND_ERROR;
+            }
+            value = (uint16_t)parsed;
+            pdp8_api_set_switch_register(runtime->cpu, value);
+        }
+
+        char *extra = command_next_token(state);
+        if (extra) {
+            monitor_console_puts("switch load takes at most one value.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        pdp8_api_set_pc(runtime->cpu, value & 0x0FFFu);
+        monitor_console_printf("PC loaded from switch register: %04o\n", value & 0x0FFFu);
+        return MONITOR_COMMAND_OK;
+    }
+
+    long parsed_value = 0;
+    if (parse_number(first, &parsed_value) != 0 || parsed_value < 0 || parsed_value > 0x0FFF) {
+        monitor_console_printf("Invalid switch value '%s'.\n", first);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *extra = command_next_token(state);
+    if (extra) {
+        monitor_console_puts("switch takes at most one value.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    pdp8_api_set_switch_register(runtime->cpu, (uint16_t)parsed_value);
+    monitor_console_printf("Switch register set to %04o.\n", (unsigned)parsed_value & 0x0FFFu);
     return MONITOR_COMMAND_OK;
 }
 

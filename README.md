@@ -36,6 +36,9 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
   Use `--list` to stream a PDP-8-style listing (defaulting the S-record output to `program.srec`) or `--list-only` to inspect without writing an image.
 - Inspect ROM contents with `./tools/dump-rom program.srec`.
 - Build the interactive monitor with `make monitor`; run `./monitor` for manual inspection and device poking.
+- Within the monitor, `switch [value|load [value]]` mirrors the PDP-8 front panel: show or set the
+  12-bit switch register, and use `switch load 0200` (for example) to copy it into the PC before
+  tracing (`t 30`) or continuing execution.
 - Run emulator microbenchmarks with `./tools/pdp8_bench [loop_count]` (default `50_000_000`). The tool times three tight loops—`NOP/JMP`, an auto-increment loop hitting address `0010`, and a `JMS`/Group 1 operate sequence within the 0o0100 budget—and reports Mloops/s and MIPS for each.
 - Monitor commands mirror PDP-8 conventions: `dep` deposits consecutive words at an address, and `mem` displays dumps eight words per line.
 
