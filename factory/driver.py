@@ -8,6 +8,7 @@ import errno
 import os
 import select
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, IO, List, Optional, Tuple
@@ -20,6 +21,9 @@ RESET_POINTER_ADDR = 0o0020
 JMP_INDIRECT_20 = 0o5420  # JMP I 20, used as the reset vector
 DEFAULT_MEMORY_WORDS = 4096
 RUN_BLOCK_CYCLES = 10_000
+KL8E_BAUD = 110
+KL8E_BITS_PER_CHAR = 10
+KL8E_CHAR_PERIOD = KL8E_BITS_PER_CHAR / KL8E_BAUD if KL8E_BAUD > 0 else 0.0
 
 
 @dataclass
@@ -46,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         "image",
         type=Path,
         help="Motorola S-record image (little-endian bytes per 12-bit word).",
+    )
+    parser.add_argument(
+        "-r",
+        "--run",
+        action="store_true",
+        help="Start execution immediately without prompting for 'go'.",
     )
     return parser.parse_args()
 
@@ -312,13 +322,29 @@ def run_factory(
             break
         total_cycles += executed
 
+        if console:
+            lib.pdp8_kl8e_console_flush(console)
+            emitted = 0
+            while lib.pdp8_kl8e_console_output_pending(console):
+                byte = ctypes.c_uint8(0)
+                if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
+                    break
+                emitted += 1
+            if emitted and KL8E_CHAR_PERIOD > 0.0:
+                time.sleep(emitted * KL8E_CHAR_PERIOD)
+                sys.stdout.flush()
+
     pump_console_input(lib, console, stdin_fd, echo_stream)
     if console:
         lib.pdp8_kl8e_console_flush(console)
+        emitted = 0
         while lib.pdp8_kl8e_console_output_pending(console):
             byte = ctypes.c_uint8(0)
             if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
                 break
+            emitted += 1
+        if emitted and KL8E_CHAR_PERIOD > 0.0:
+            time.sleep(emitted * KL8E_CHAR_PERIOD)
         sys.stdout.flush()
     return total_cycles
 
@@ -493,7 +519,8 @@ def main() -> int:
             print(f"Reset vector set from S-record START: 0000 -> JMP I 20, 0020 -> {entry_address:04o}.")
         else:
             print(f"Reset vector set: 0000 -> JMP I 20, 0020 -> {entry_address:04o}.")
-        print("Type 'go' to start the factory, or 'quit' to exit.")
+        if not args.run:
+            print("Type 'go' to start the factory, or 'quit' to exit.")
 
         try:
             stdin_fd = sys.stdin.fileno()
@@ -507,19 +534,20 @@ def main() -> int:
             except OSError:
                 echo_stream = None
 
-        while True:
-            try:
-                command = input("factory> ").strip().lower()
-            except EOFError:
-                command = "quit"
-            if command in ("go", "g"):
-                break
-            if command in ("quit", "exit", "q"):
-                print("Exiting without running.")
-                return 0
-            if not command:
-                continue
-            print("Enter 'go' to run or 'quit' to exit.")
+        if not args.run:
+            while True:
+                try:
+                    command = input("factory> ").strip().lower()
+                except EOFError:
+                    command = "quit"
+                if command in ("go", "g"):
+                    break
+                if command in ("quit", "exit", "q"):
+                    print("Exiting without running.")
+                    return 0
+                if not command:
+                    continue
+                print("Enter 'go' to run or 'quit' to exit.")
 
         total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream)
         report_state(lib, cpu, total_cycles)
