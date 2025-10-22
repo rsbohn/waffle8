@@ -41,6 +41,7 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
   tracing (`t 30`) or continuing execution.
 - Run emulator microbenchmarks with `./tools/pdp8_bench [loop_count]` (default `50_000_000`). The tool times three tight loops—`NOP/JMP`, an auto-increment loop hitting address `0010`, and a `JMS`/Group 1 operate sequence within the 0o0100 budget—and reports Mloops/s and MIPS for each.
 - Monitor commands mirror PDP-8 conventions: `dep` deposits consecutive words at an address, and `mem` displays dumps eight words per line.
+- When targeting CircuitPython hardware, follow the workflow in `docs/circuitpython.md` for deployment, module layout, and troubleshooting notes specific to CircuitPython 10.
 
 ## Peripherals
 
