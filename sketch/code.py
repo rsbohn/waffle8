@@ -1,64 +1,105 @@
 from pdp8 import EMULATOR as emu
 
+DULL_BOY_ORIGIN = 0o0200
+DULL_BOY_ROM = [
+    0o7300,
+    0o7200,
+    0o1245,
+    0o4205,
+    0o5201,
+    0o0000,
+    0o3241,
+    0o1641,
+    0o7440,
+    0o5213,
+    0o5605,
+    0o4217,
+    0o4227,
+    0o2241,
+    0o5207,
+    0o0000,
+    0o3242,
+    0o6041,
+    0o5221,
+    0o1242,
+    0o6046,
+    0o7200,
+    0o5617,
+    0o0000,
+    0o1246,
+    0o3243,
+    0o1247,
+    0o3244,
+    0o2244,
+    0o5234,
+    0o2243,
+    0o5232,
+    0o5627,
+    0o0000,
+    0o0000,
+    0o0000,
+    0o0000,
+    0o0250,
+    0o7740,
+    0o7400,
+    0o0101,
+    0o0154,
+    0o0154,
+    0o0040,
+    0o0167,
+    0o0157,
+    0o0162,
+    0o0153,
+    0o0040,
+    0o0141,
+    0o0156,
+    0o0144,
+    0o0040,
+    0o0156,
+    0o0157,
+    0o0040,
+    0o0160,
+    0o0154,
+    0o0141,
+    0o0171,
+    0o0040,
+    0o0155,
+    0o0141,
+    0o0153,
+    0o0145,
+    0o0040,
+    0o0112,
+    0o0141,
+    0o0143,
+    0o0153,
+    0o0040,
+    0o0141,
+    0o0040,
+    0o0144,
+    0o0165,
+    0o0154,
+    0o0154,
+    0o0040,
+    0o0142,
+    0o0157,
+    0o0171,
+    0o0056,
+    0o0015,
+    0o0012,
+    0o0000,
+]
 
-def trace(emulator, steps: int, reset_halt: bool = False) -> None:
-    """Execute a bounded number of instructions and print key registers."""
-    if reset_halt:
-        emulator.halted = False
-    for _ in range(steps):
-        if emulator.halted:
-            break
-        emulator.step()
-    print(
-        f"AC={emulator.ac} PC={emulator.pc} LINK={emulator.link} HALTED={emulator.halted}"
-    )
-    m0 = [oct(word) for word in emulator.memory[:10]]
-    ret_direct = oct(emulator.memory[0o20])
-    ret_indirect = oct(emulator.memory[0o30])
-    print("M0=", m0)
-    print(f"RET20={ret_direct} RET30={ret_indirect}")
-
+# Speed up the SLOWLY delay loops for the microcontroller demo.
+DULL_BOY_ROM[38] = 0o7777  # DELAY_OUTER_INIT -> -1
+DULL_BOY_ROM[39] = 0o7777  # DELAY_INNER_INIT -> -1
 
 emu.reset()
+emu.load(DULL_BOY_ORIGIN, DULL_BOY_ROM)
+emu.pc = DULL_BOY_ORIGIN
 
-# Main program:
-#   0: JMS 20 (direct jump to subroutine A)
-#   1: JMP 4  (direct jump skips over the pointer data at address 2)
-#   2: Pointer to subroutine B (used by JMS I 2)
-#   4: JMS I 2 (indirect jump to subroutine B)
-#   5: HLT     (terminate after both subroutines run)
-emu.load(
-    0o0000,
-    [
-        0o4020,  # JMS 20
-        0o5004,  # JMP 4
-        0o0030,  # pointer to subroutine B
-        0o0000,  # padding
-        0o4402,  # JMS I 2
-        0o7402,  # HLT
-    ],
-)
-
-# Subroutine A at 0o20: increment AC once then return via indirect jump.
-emu.load(
-    0o0020,
-    [
-        0o0000,  # return slot overwritten by JMS
-        0o7001,  # IAC
-        0o5420,  # JMP I 20
-    ],
-)
-
-# Subroutine B at 0o30: increment AC twice, then return indirectly.
-emu.load(
-    0o0030,
-    [
-        0o0000,  # return slot overwritten by JMS I
-        0o7001,  # IAC
-        0o7001,  # IAC
-        0o5430,  # JMP I 30
-    ],
-)
-
-for _ in range(9):
-    trace(emu, 1)
+while True:
+    emu.step()
+    if emu.halted:
+        break
+    if emu.output and emu.output[-1] == "\n":
+        emu.output.clear()
