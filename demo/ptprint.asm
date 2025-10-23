@@ -44,14 +44,15 @@ RDLOOP, IOT 6671                / Skip if paper tape ready
         / PDP-8 words are 12 bits, can hold two 6-bit characters
         
         / Print first character (upper 6 bits)
-        CLA                     / Clear AC
+        CLA CLL                 / Clear AC and Link
         TAD TAPEWD              / Load tape word
-        RTR RTR RTR RTR RTR RTR / Rotate right 6 times to get upper 6 bits
+        RAR; RAR; RAR           / Rotate right 6 positions total
+        RAR; RAR; RAR
         AND SIXBIT              / Mask to 6 bits
         JMS PRINTCH             / Print the character
-        
-        / Print second character (lower 6 bits)  
-        CLA                     / Clear AC
+
+        / Print second character (lower 6 bits)
+        CLA CLL                 / Clear AC and Link
         TAD TAPEWD              / Load tape word
         AND SIXBIT              / Mask to lower 6 bits
         JMS PRINTCH             / Print the character
@@ -73,23 +74,19 @@ NOTAPE, CLA                     / Clear AC
 / Exit:  Character printed, AC preserved
 /------------------------------------------------------------
 PRINTCH, 0                      / Return address
-        DCA CHAR                / Save character
-        
-        / Convert 6-bit value to printable ASCII
-        / 6-bit values 0-63 need to map to reasonable ASCII
-        TAD CHAR                / Load character
-        SZA                     / Skip if zero
-        JMP NOTZERO             / Not zero
-        TAD SPACE               / Load space character (ASCII 32)
-        JMP PRCHAR              / Go print it
-        
-NOTZERO, TAD CHAR               / Reload character
-        / Simple mapping: add space (32) to get into printable range
-        TAD SPACE               / Add 32 to get into ASCII printable range
-        AND ASCII7              / Mask to 7 bits for safety
-        / This maps: 1->33(!), 2->34("), ..., 42->74(J), etc.
+        DCA CHAR                / Save SIXBIT character value
 
-PRCHAR, DCA CHAR                / Save final character
+        / Convert SIXBIT code to ASCII via lookup table
+        CLA
+        TAD CHARMAP_PTR         / Load base address of conversion table
+        DCA TABPTR
+        CLA
+        TAD CHAR                / AC = index within table (0-63)
+        TAD TABPTR              / Add base address to index
+        DCA TABPTR              / TABPTR -> table entry
+        CLA
+        TAD I TABPTR            / Fetch ASCII translation
+        DCA CHAR                / Save final character
 
 / Wait for printer ready and print
 PRWAIT, IOT 6601                / Skip if printer ready
@@ -127,11 +124,81 @@ MSGPTR, 0                       / Message pointer for error messages
 
 / Constants for character conversion
 SIXBIT, 0077                    / 6-bit mask (octal 77 = decimal 63)
-ASCII7, 0177                    / 7-bit ASCII mask  
 SPACE,  0040                    / ASCII space (32 decimal, 40 octal)
 
+NOMSG,  NOTEXT                  / Pointer to "NO TAPE" message
+
+/ SIXBIT to ASCII conversion table (indices 0-63)
+CHARMAP_PTR, CHARMAP            / Pointer to lookup table
+TABPTR, 0                       / Scratch pointer for table indexing
+
+CHARMAP,
+        0040                    / 00 -> space
+        0101                    / 01 -> A
+        0102                    / 02 -> B
+        0103                    / 03 -> C
+        0104                    / 04 -> D
+        0105                    / 05 -> E
+        0106                    / 06 -> F
+        0107                    / 07 -> G
+        0110                    / 08 -> H
+        0111                    / 09 -> I
+        0112                    / 10 -> J
+        0113                    / 11 -> K
+        0114                    / 12 -> L
+        0115                    / 13 -> M
+        0116                    / 14 -> N
+        0117                    / 15 -> O
+        0120                    / 16 -> P
+        0121                    / 17 -> Q
+        0122                    / 18 -> R
+        0123                    / 19 -> S
+        0124                    / 20 -> T
+        0125                    / 21 -> U
+        0126                    / 22 -> V
+        0127                    / 23 -> W
+        0130                    / 24 -> X
+        0131                    / 25 -> Y
+        0132                    / 26 -> Z
+        0056                    / 27 -> '.' (reserved)
+        0056                    / 28 -> '.' (reserved)
+        0056                    / 29 -> '.' (reserved)
+        0015                    / 30 -> carriage return
+        0012                    / 31 -> line feed
+        0060                    / 32 -> '0'
+        0061                    / 33 -> '1'
+        0062                    / 34 -> '2'
+        0063                    / 35 -> '3'
+        0064                    / 36 -> '4'
+        0065                    / 37 -> '5'
+        0066                    / 38 -> '6'
+        0067                    / 39 -> '7'
+        0070                    / 40 -> '8'
+        0071                    / 41 -> '9'
+        0041                    / 42 -> '!'
+        0054                    / 43 -> ','
+        0055                    / 44 -> '-'
+        0056                    / 45 -> '.'
+        0047                    / 46 -> '\''
+        0072                    / 47 -> ':'
+        0073                    / 48 -> ';'
+        0077                    / 49 -> '?'
+        0056                    / 50 -> '.' (undefined)
+        0056                    / 51 -> '.' (undefined)
+        0056                    / 52 -> '.' (undefined)
+        0056                    / 53 -> '.' (undefined)
+        0056                    / 54 -> '.' (undefined)
+        0056                    / 55 -> '.' (undefined)
+        0056                    / 56 -> '.' (undefined)
+        0056                    / 57 -> '.' (undefined)
+        0056                    / 58 -> '.' (undefined)
+        0056                    / 59 -> '.' (undefined)
+        0056                    / 60 -> '.' (undefined)
+        0056                    / 61 -> '.' (undefined)
+        0056                    / 62 -> '.' (undefined)
+        0056                    / 63 -> '.' (undefined)
+
 / Error messages
-NOMSG,  NOTEXT
 NOTEXT, 0116                    / 'N'
         0117                    / 'O'
         0040                    / ' '

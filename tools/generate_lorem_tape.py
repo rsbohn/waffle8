@@ -79,7 +79,7 @@ def text_to_papertape(text, tape_id="TP001"):
         chunk = bit_sequences[i:i + chunks_per_line]
         if chunk:  # Only add non-empty chunks
             line_num = (i // chunks_per_line) + 1
-            tape_line = f"{tape_id}{line_num:03d}: " + " ".join(chunk)
+            tape_line = f"{tape_id}{line_num:03o}: " + " ".join(chunk)
             tape_lines.append(tape_line)
     
     return "\n".join(tape_lines)
