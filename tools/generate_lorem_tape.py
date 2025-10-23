@@ -96,7 +96,7 @@ def main():
     print()
     
     # Convert to papertape format
-    papertape = text_to_papertape(lorem_text, "TP")
+    papertape = text_to_papertape(lorem_text, "AU")
     
     # Save to file
     output_file = "/home/rsbohn/emulation/waffle8/tapes/lorem.tape"

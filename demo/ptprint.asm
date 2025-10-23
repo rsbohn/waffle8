@@ -32,10 +32,23 @@
 START,  CLA CLL                 / Clear AC and Link
         TAD BLKNUM              / Load block number to read
         IOT 6672                / Select block on paper tape
+        JMS RDLOOP
+        ISZ BLKNUM              / Increment block number for next read
+        CLA CLL
+        TAD BLKNUM
+        IOT 6672
+        JMS RDLOOP
+        ISZ BLKNUM
+        CLA CLL
+        TAD BLKNUM
+        IOT 6672
+        JMS RDLOOP
+        JMP DONE
 
 / Main read and print loop - don't check ready immediately after select
-RDLOOP, IOT 6671                / Skip if paper tape ready
-        JMP DONE                / Exit when no more data
+RDLOOP, 0
+        IOT 6671                / Skip if paper tape ready
+        JMP I RDLOOP            / return
         
         IOT 6674                / Read next word from tape into AC
         DCA TAPEWD              / Save the tape word
