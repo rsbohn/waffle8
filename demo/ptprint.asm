@@ -43,6 +43,16 @@ START,  CLA CLL                 / Clear AC and Link
         TAD BLKNUM
         IOT 6672
         JMS RDLOOP
+        ISZ BLKNUM
+        CLA CLL
+        TAD BLKNUM
+        IOT 6672
+        JMS RDLOOP
+        ISZ BLKNUM
+        CLA CLL
+        TAD BLKNUM
+        IOT 6672
+        JMS RDLOOP
         JMP DONE
 
 / Main read and print loop - don't check ready immediately after select
