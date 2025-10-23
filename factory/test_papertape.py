@@ -194,10 +194,15 @@ def get_tape_path() -> str:
     config_path = Path("pdp8.config")
     if config_path.exists():
         with open(config_path, 'r') as f:
+            in_paper_tape_section = False
             for line in f:
                 line = line.strip()
-                if line.startswith("paper_tape="):
+                if line.startswith("device paper_tape"):
+                    in_paper_tape_section = True
+                elif in_paper_tape_section and line.startswith("image ="):
                     return line.split("=", 1)[1].strip()
+                elif in_paper_tape_section and line.startswith("}"):
+                    break
     
     # Default to demo tape
     return "tapes/tp_demo.tape"
