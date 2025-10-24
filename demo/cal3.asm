@@ -60,11 +60,8 @@ START,  CLA CLL
         DCA CHBUF
         DCA PTR
 
-        CLA                     / Load requested year
-        TAD YEAR_IN_PTR
-        DCA PTR
-        CLA
-        TAD I PTR
+        CLA                     / Load requested year from S (switch register)
+        OSR
         DCA YEAR_VALUE
 
         CLA                     / Load requested month (1-12)
