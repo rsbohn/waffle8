@@ -60,9 +60,15 @@ GROUP1_BITS = {
 }
 
 GROUP2_BITS = {
-    "SMA": 0o0020,
+    "SMA": 0o0100,
     "SZA": 0o0040,
-    "SNL": 0o0100,
+    "SNL": 0o0020,
+    # Reverse-sense variants include the SENSE bit (0o0010).  Presenting
+    # them here simplifies lookups if the assembler or callers use these
+    # mnemonics directly.
+    "SPA": 0o0110,  # SMA | 0o0010
+    "SNA": 0o0050,  # SZA | 0o0010
+    "SZL": 0o0030,  # SNL | 0o0010
     "CLA": 0o0200,
     "OSR": 0o0004,
     "HLT": 0o0002,

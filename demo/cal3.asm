@@ -117,8 +117,11 @@ P2D_LOOP,
         CLA
         TAD PRT2D_WORK
         TAD NEG_10
-        SMA
-        JMP P2D_DONE
+        SMA                     / skip when AC is negative  
+        JMP CONTINUE           / Continue when AC >= 0
+        JMP P2D_DONE           / Exit when AC < 0
+
+CONTINUE,
         DCA PRT2D_WORK
         ISZ TENS
         JMP P2D_LOOP
