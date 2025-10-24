@@ -56,4 +56,22 @@ When run with `tapes/lorem.tape`, the program will print the automotive lorem ip
 THE TACOMA RESPONDS AERODYNAMIC PRECISE STEERING HORSEPOWER...
 ```
 
+## Printing a Calendar with `ptprint`
+
+You can feed calendar text to the line printer by converting it to the same SIXBIT tape format:
+
+1. Generate a tape image:
+   ```bash
+   python3 tools/generate_calendar_tape.py 2025 --month 1
+   ```
+   This writes `tapes/calendar-2025-01.tape`. Omitting `--month` creates the full-year layout.
+2. Update `pdp8.config` so the paper tape device points at the generated file:
+   ```ini
+   device paper_tape {
+     iot = 667x
+     image = tapes/calendar-2025-01.tape
+   }
+   ```
+3. Load and run `demo/ptprint.srec` as usual. The January 2025 calendar will spill onto the line printer.
+
 This demonstrates reading structured data from paper tape and formatting it for human-readable output on the line printer.
