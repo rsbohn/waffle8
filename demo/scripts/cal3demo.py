@@ -10,7 +10,7 @@ Defaults:
   - SREC: demo/cal3.srec
   - year: 1962
   - server: http://127.0.0.1:5000
-  - output: demo/cal3_printer.txt
+  - output: printer/output.txt
 
 This script uses the web wrapper endpoints created in tools/webdp8.py:
   POST /loader  (multipart file upload)
@@ -82,8 +82,8 @@ def main(argv=None):
     p.add_argument('--year', type=int, default=1962, help='decimal year to place in the PDP-8 switch (S)')
     p.add_argument('--month', type=int, default=10, help='decimal month to write into MONTH_IN (1-12)')
     p.add_argument('--server', default='http://127.0.0.1:5000', help='webdp8 server base URL')
-    p.add_argument('--out', default='demo/cal3_printer.txt', help='output file to save printer text')
-    p.add_argument('--start', default='0100', help='entry point to trace (octal string)')
+    p.add_argument('--out', default='printer/output.txt', help='output file to save printer text')
+    p.add_argument('--start', default='0200', help='entry point to trace (octal string)')
     p.add_argument('--cycles', type=int, default=1024, help='cycles per trace chunk')
     p.add_argument('--max-iter', type=int, default=20, help='max trace chunks to run')
     args = p.parse_args(argv)
@@ -128,18 +128,26 @@ def main(argv=None):
 
     print("Fetching printer output...")
     try:
-        out = fetch_printer(args.server)
+        raw_output = fetch_printer(args.server)
     except Exception as e:
         print("Failed to fetch printer output:", e, file=sys.stderr)
+        return 6
+
+    # Normalise to the most recent non-empty line to avoid stale data
+    segments = [seg.strip() for seg in re.split(r'[\r\n]+', raw_output) if seg.strip()]
+    final_line = segments[-1] if segments else raw_output.strip()
+
+    if not final_line:
+        print("No printer output captured", file=sys.stderr)
         return 6
 
     # Save output
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as f:
-        f.write(out)
+        f.write(final_line + "\n")
 
     print(f"Printer output written to: {args.out}\n---BEGIN OUTPUT---\n")
-    print(out)
+    print(final_line)
     print("\n---END OUTPUT---")
     return 0
 

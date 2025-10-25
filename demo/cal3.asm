@@ -45,6 +45,8 @@ ONE,            0001
 TWO,            0002
 NINE,           0011
 SPACE,          0040
+CR,             0015
+LF,             0012
 
 PRT2D,  0
         JMP I PRT2D_ADR
@@ -193,6 +195,16 @@ MONTH_OK2,
         DCA DAY_TEMP
         JMS PRT2D
 
+        CLA
+        TAD CR
+        DCA CHBUF
+        JMS PUTCH
+
+        CLA
+        TAD LF
+        DCA CHBUF
+        JMS PUTCH
+
         HLT                     / Done
         JMP START               / Simple restart loop
 
@@ -298,7 +310,7 @@ NOT_LEAP2,
 
 GOT_LEN,
 
-        JMP I CALC_IMPL
+        JMP I CALC
 
 PRT2D_IMPL, 0
         CLA

@@ -15,7 +15,6 @@
 - `python3 tools/webdp_trace.py $(cat trace-args)` for selective trace peeks
 
 ## Current status / follow-ups
-- Latest cal3 run prints `1962 October`; still need to confirm the weekday print path fires (trace suggests `JMS FIRSTDAY` isn’t getting invoked yet).
-- `FIRSTDAY_IMPL` stores a pointer, but zero-page values stay zero after the run—need to double-check indirect jumps around the new vector.
-- `webdp_trace.py` works but still needs better failure reporting when the filter returns no rows (currently just “(no steps to display)”).
+- Verified the weekday path: `FIRST_DAY_PTR` now holds the DOW string (e.g. Monday), and the printer output lands in `printer/output.txt`.
+- `webdp_trace.py` table output feels good; consider adding range filters if the manual step selection becomes tedious.
 - UI skeleton is static HTML/CSS; next step is to wire API calls (ROM upload, register refresh) once the backend endpoints settle.
