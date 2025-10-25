@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Waffle Factory Control Room</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Waffle Factory Control Room</h1>
+      <p class="tagline">Monitor the PDP-8 and keep the irons humming.</p>
+    </header>
+
+    <main class="layout">
+      <section class="card card--wide" id="rom-loader">
+        <h2>ROM Loader</h2>
+        <p>Select a Motorola S-record image to load into the emulator.</p>
+        <form id="rom-form">
+          <label class="input-label" for="rom-file">S-record file</label>
+          <input type="file" id="rom-file" name="rom" accept=".srec,.SREC,.txt" />
+          <button type="submit" class="button button--primary">Upload</button>
+          <p class="hint">The loader installs a JMP I 20 reset vector automatically.</p>
+        </form>
+        <div class="status-block" id="rom-status" aria-live="polite"></div>
+      </section>
+
+      <section class="card" id="execution-controls">
+        <h2>Execution</h2>
+        <div class="button-group">
+          <button type="button" class="button" data-action="reset">Reset</button>
+          <button type="button" class="button" data-action="step">Step</button>
+          <button type="button" class="button button--primary" data-action="run">Run</button>
+          <button type="button" class="button" data-action="halt">Halt</button>
+        </div>
+        <label class="input-label" for="cycle-count">Cycle budget</label>
+        <input type="number" id="cycle-count" name="cycles" min="1" max="100000" value="1024" />
+        <div class="status-block" id="execution-status" aria-live="polite"></div>
+      </section>
+
+      <section class="card" id="registers">
+        <h2>Registers</h2>
+        <dl class="register-grid" aria-live="polite">
+          <div>
+            <dt>PC</dt>
+            <dd id="reg-pc">0000</dd>
+          </div>
+          <div>
+            <dt>AC</dt>
+            <dd id="reg-ac">0000</dd>
+          </div>
+          <div>
+            <dt>Link</dt>
+            <dd id="reg-link">0</dd>
+          </div>
+          <div>
+            <dt>Switch</dt>
+            <dd id="reg-switch">0000</dd>
+          </div>
+        </dl>
+        <button type="button" class="button button--secondary" data-action="refresh-registers">
+          Refresh
+        </button>
+      </section>
+
+      <section class="card card--stacked" id="console-output">
+        <h2>Teleprinter Output</h2>
+        <pre id="teleprinter-log" class="log-window" aria-live="polite"></pre>
+        <div class="input-row">
+          <label for="teleprinter-input" class="input-label">Keyboard input</label>
+          <input type="text" id="teleprinter-input" maxlength="64" />
+          <button type="button" class="button" data-action="send-input">Send</button>
+        </div>
+      </section>
+
+      <section class="card card--stacked" id="line-printer">
+        <h2>Line Printer</h2>
+        <pre id="printer-log" class="log-window" aria-live="polite"></pre>
+      </section>
+
+      <section class="card card--wide" id="factory-dashboard">
+        <h2>Factory Dashboard</h2>
+        <div class="dashboard-grid">
+          <article class="dashboard-panel">
+            <h3>Production</h3>
+            <p class="placeholder">Coming soon: waffle throughput metrics.</p>
+          </article>
+          <article class="dashboard-panel">
+            <h3>Ovens</h3>
+            <p class="placeholder">Status indicators for 16 irons will render here.</p>
+          </article>
+          <article class="dashboard-panel">
+            <h3>Packaging</h3>
+            <p class="placeholder">Visualize conveyor load and packaging queue.</p>
+          </article>
+          <article class="dashboard-panel">
+            <h3>Environment</h3>
+            <p class="placeholder">Temperature, humidity, and cold storage telemetry.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <small>&copy; {{ current_year }} Waffle Factory Research Lab</small>
+    </footer>
+
+    <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>

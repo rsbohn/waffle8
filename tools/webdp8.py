@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from datetime import datetime
+from flask import Flask, jsonify, render_template, request
 import ctypes
 import ctypes.util
 from pathlib import Path
@@ -13,8 +14,13 @@ if str(ROOT) not in sys.path:
 
 # Use the S-record loader from the factory helper
 from factory.driver import load_srec
+from factory.ui import STATIC_DIR, TEMPLATES_DIR
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=str(STATIC_DIR),
+    template_folder=str(TEMPLATES_DIR),
+)
 
 # --- emulator init (singleton for now) ---
 # Prefer the packaged library under `./factory/libpdp8.so` so the web
@@ -66,6 +72,12 @@ lib.pdp8_line_printer_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 lib.pdp8_line_printer_attach.restype = ctypes.c_int
 lib.pdp8_line_printer_set_column_limit.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
 lib.pdp8_line_printer_set_column_limit.restype = ctypes.c_int
+
+# Switch register access
+lib.pdp8_api_set_switch_register.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+lib.pdp8_api_set_switch_register.restype = None
+lib.pdp8_api_get_switch_register.argtypes = [ctypes.c_void_p]
+lib.pdp8_api_get_switch_register.restype = ctypes.c_uint16
 
 cpu = lib.pdp8_api_create(0x1000)  # 4K core, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
 cycles_counter = 0
@@ -126,6 +138,11 @@ except Exception:
     _tele_tmp = None
     _console_obj = None
     _printer_obj = None
+
+@app.get("/")
+def index():
+    """Serve the waffle factory control room shell."""
+    return render_template("index.html", current_year=datetime.now().year)
 
 def parse_num(v):
     if isinstance(v, int):
@@ -209,6 +226,43 @@ def get_regs():
         "link": 1 if lk else 0,
         "cycles": cycles_counter  # local counter
     })
+
+
+@app.get("/switch")
+def get_switch():
+    """Read the PDP-8 switch register (S)."""
+    try:
+        sval = lib.pdp8_api_get_switch_register(cpu)
+        return jsonify({"switch": to_octal(sval)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.put("/switch")
+def put_switch():
+    """Set the PDP-8 switch register. JSON: {"val": "03751"} or {"val":1234}.
+
+    This lets programs that use `OSR` read values from S.
+    """
+    try:
+        body = request.get_json(force=True, silent=False)
+    except Exception as exc:
+        return jsonify({"error": "invalid JSON"}), 400
+
+    if not body or "val" not in body:
+        return jsonify({"error": "need {val: octal|decimal}"}), 400
+
+    try:
+        v = parse_num(body["val"])
+    except Exception as exc:
+        return jsonify({"error": f"bad value: {exc}"}), 400
+
+    try:
+        lib.pdp8_api_set_switch_register(cpu, v & 0x0FFF)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"written": to_octal(v)})
 
 # ---------- /mem GET ----------
 @app.get("/mem")
