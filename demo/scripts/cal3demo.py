@@ -86,6 +86,7 @@ def main(argv=None):
     p.add_argument('--start', default='0200', help='entry point to trace (octal string)')
     p.add_argument('--cycles', type=int, default=1024, help='cycles per trace chunk')
     p.add_argument('--max-iter', type=int, default=20, help='max trace chunks to run')
+    p.add_argument('--raw', action='store_true', help='store the full printer output without collapsing to one line')
     args = p.parse_args(argv)
 
     if not os.path.exists(args.srec):
@@ -128,26 +129,36 @@ def main(argv=None):
 
     print("Fetching printer output...")
     try:
-        raw_output = fetch_printer(args.server)
+        printer_output = fetch_printer(args.server)
     except Exception as e:
         print("Failed to fetch printer output:", e, file=sys.stderr)
         return 6
 
-    # Normalise to the most recent non-empty line to avoid stale data
-    segments = [seg.strip() for seg in re.split(r'[\r\n]+', raw_output) if seg.strip()]
-    final_line = segments[-1] if segments else raw_output.strip()
+    if args.raw:
+        payload = printer_output.rstrip('\r\n')
+        if not payload.strip():
+            print("No printer output captured", file=sys.stderr)
+            return 6
+        to_save = payload
+    else:
+        # Normalise to the most recent non-empty line to avoid stale data
+        segments = [seg.strip() for seg in re.split(r'[\r\n]+', printer_output) if seg.strip()]
+        final_line = segments[-1] if segments else printer_output.strip()
 
-    if not final_line:
-        print("No printer output captured", file=sys.stderr)
-        return 6
+        if not final_line:
+            print("No printer output captured", file=sys.stderr)
+            return 6
+        to_save = final_line
 
     # Save output
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as f:
-        f.write(final_line + "\n")
+        f.write(to_save)
+        if not to_save.endswith("\n"):
+            f.write("\n")
 
     print(f"Printer output written to: {args.out}\n---BEGIN OUTPUT---\n")
-    print(final_line)
+    print(to_save)
     print("\n---END OUTPUT---")
     return 0
 

@@ -23,6 +23,14 @@ MONTH_LEN,      0000
 LEAP_FLAG,      0000
 FIRST_DAY,      0000
 FIRST_DAY_PTR,  0000
+CUR_WEEK_PTR,   0000
+PRINT_COL,      0000
+WEEK_REMAIN,    0000
+CUR_DAY,        0000
+DAY_REMAIN,     0000
+WEEK_GAP,       0000
+WEEK_COUNT,     0000
+FORMAT_FLAGS,   0000
 
 YEAR_IN_PTR,    YEAR_IN
 MONTH_IN_PTR,   MONTH_IN
@@ -32,6 +40,7 @@ CAL_PTRS_PTR,   CAL_PTRS
 MONTHLEN_COMM_PTR, MONTHLEN_COMMON
 MONTHLEN_LEAP_PTR, MONTHLEN_LEAP
 DOW_PTRS_PTR,   DOW_PTRS
+DAY_HDR_PTR,    DAY_HDR
 
 NEG_ONE,        07777
 NEG_10,         07766
@@ -39,6 +48,9 @@ NEG_1900,       04224
 NEG_2000,       04060
 NEG_BASE,       04133
 NEG_28,         07744
+NEG_SIX,        07772
+NEG_SEVEN,      07771
+NEG_EIGHT,      07770
 MASK003,        0003
 ZERO,           0060
 ONE,            0001
@@ -72,6 +84,22 @@ FIRSTDAY, 0
         JMP I FIRSTDAY_ADR
 FIRSTDAY_ADR, FIRSTDAY_IMPL
 
+PRINT_HEADER, 0
+        JMP I PRINT_HEADER_ADR
+PRINT_HEADER_ADR, PRINT_HEADER_IMPL
+
+PRINT_WEEK, 0
+        JMP I PRINT_WEEK_ADR
+PRINT_WEEK_ADR, PRINT_WEEK_IMPL
+
+PRINT_BLANK, 0
+        JMP I PRINT_BLANK_ADR
+PRINT_BLANK_ADR, PRINT_BLANK_IMPL
+
+PRINT_CALENDAR, 0
+        JMP I PRINT_CALENDAR_ADR
+PRINT_CALENDAR_ADR, PRINT_CALENDAR_IMPL
+
         *0200                   / Page 1: program entry
 
 START,  CLA CLL
@@ -86,6 +114,14 @@ START,  CLA CLL
         DCA DAY_TEMP
         DCA CHBUF
         DCA PTR
+        DCA CUR_WEEK_PTR
+        DCA PRINT_COL
+        DCA WEEK_REMAIN
+        DCA CUR_DAY
+        DCA DAY_REMAIN
+        DCA WEEK_GAP
+        DCA WEEK_COUNT
+        DCA FORMAT_FLAGS
 
         / Inline error characters placed in page 1 so direct TAD works
 ERR_Q1,  0077
@@ -128,6 +164,7 @@ MONTH_OK1,
         CLA
         TAD MONTH_VALUE
         TAD NEG_12        / NEG_12 (octal)
+        TAD NEG_ONE       / Shift threshold so month == 12 passes
         SPA
         JMP MONTH_OK2
         / inline BAD_MONTH_PRINT: emit three '?' characters then halt
@@ -195,15 +232,8 @@ MONTH_OK2,
         DCA DAY_TEMP
         JMS PRT2D
 
-        CLA
-        TAD CR
-        DCA CHBUF
-        JMS PUTCH
-
-        CLA
-        TAD LF
-        DCA CHBUF
-        JMS PUTCH
+        JMS PRINT_HEADER
+        JMS PRINT_CALENDAR
 
         HLT                     / Done
         JMP START               / Simple restart loop
@@ -275,6 +305,9 @@ MOD28_DONE_C,
         TAD MONTH_OFF
         TAD TEMPLATE_PTR
         DCA PTR
+        CLA
+        TAD PTR
+        DCA CUR_WEEK_PTR
         CLA
         TAD I PTR
         DCA MONTH_START
@@ -477,6 +510,157 @@ FIRSTDAY_IMPL,0
         TAD I PTR
         DCA FIRST_DAY_PTR
         JMP I FIRSTDAY
+
+        *01100                  / Page 4 continued: calendar printing helpers
+
+PRINT_HEADER_IMPL,0
+        CLA
+        TAD CR
+        DCA CHBUF
+        JMS PUTCH
+        CLA
+        TAD LF
+        DCA CHBUF
+        JMS PUTCH
+        CLA
+        TAD DAY_HDR_PTR
+        DCA PTR
+        JMS PRINT
+        JMP I PRINT_HEADER
+
+        *01200
+
+PRINT_BLANK_IMPL,0
+        CLA
+        TAD SPACE
+        DCA CHBUF
+        JMS PUTCH
+        CLA
+        TAD SPACE
+        DCA CHBUF
+        JMS PUTCH
+        JMP I PRINT_BLANK
+
+        *01300
+
+PRINT_WEEK_IMPL,0
+        CLA
+        DCA PRINT_COL
+        CLA
+        TAD NEG_EIGHT
+        DCA WEEK_REMAIN
+
+PRINT_WEEK_LOOP,
+        ISZ WEEK_REMAIN
+        JMP PRINT_WEEK_BODY
+        JMP PRINT_WEEK_DONE
+
+PRINT_WEEK_BODY,
+        CLA
+        TAD PRINT_COL
+        SZA
+        JMP PRINT_WEEK_SPACE
+        JMP PRINT_WEEK_CELL
+
+PRINT_WEEK_SPACE,
+        CLA
+        TAD SPACE
+        DCA CHBUF
+        JMS PUTCH
+
+PRINT_WEEK_CELL,
+        CLA
+        TAD WEEK_GAP
+        SZA
+        JMP PRINT_WEEK_FROM_GAP
+        JMP PRINT_WEEK_CHECK_DAY
+
+PRINT_WEEK_FROM_GAP,
+        JMS PRINT_BLANK
+        CLA
+        TAD WEEK_GAP
+        TAD NEG_ONE
+        DCA WEEK_GAP
+        JMP PRINT_WEEK_ADVANCE
+
+PRINT_WEEK_CHECK_DAY,
+        CLA
+        TAD DAY_REMAIN
+        SZA
+        JMP PRINT_WEEK_HAVE_DAY
+        JMS PRINT_BLANK
+        JMP PRINT_WEEK_ADVANCE
+
+PRINT_WEEK_HAVE_DAY,
+        CLA
+        TAD CUR_DAY
+        DCA DAY_TEMP
+        JMS PRT2D
+        ISZ CUR_DAY
+        CLA
+        TAD DAY_REMAIN
+        TAD NEG_ONE
+        DCA DAY_REMAIN
+
+PRINT_WEEK_ADVANCE,
+        ISZ PRINT_COL
+        JMP PRINT_WEEK_LOOP
+
+PRINT_WEEK_DONE,
+        CLA
+        DCA WEEK_GAP
+        CLA
+        TAD CR
+        DCA CHBUF
+        JMS PUTCH
+        CLA
+        TAD LF
+        DCA CHBUF
+        JMS PUTCH
+        JMP I PRINT_WEEK
+
+        *01400
+
+PRINT_CALENDAR_IMPL,0
+        CLA
+        TAD SPACE
+        DCA LEAD_CHAR
+
+        CLA
+        TAD ONE
+        DCA CUR_DAY
+
+        CLA
+        TAD MONTH_LEN
+        DCA DAY_REMAIN
+
+        CLA
+        TAD MONTH_START
+        DCA WEEK_GAP
+
+        CLA
+        TAD NEG_SIX
+        DCA WEEK_COUNT
+
+PRINT_CAL_LOOP,
+        CLA
+        TAD DAY_REMAIN
+        SZA
+        JMP PRINT_CAL_BODY
+        CLA
+        TAD WEEK_GAP
+        SZA
+        JMP PRINT_CAL_BODY
+        JMP PRINT_CAL_DONE
+
+PRINT_CAL_BODY,
+        JMS PRINT_WEEK
+        ISZ WEEK_COUNT
+        JMP PRINT_CAL_LOOP
+        JMP PRINT_CAL_DONE
+
+PRINT_CAL_DONE,
+        JMP I PRINT_CALENDAR
 
         *02000                   / Page 8: input slots and pointer tables
 
