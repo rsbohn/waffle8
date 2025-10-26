@@ -47,6 +47,7 @@ TAB_PTR,    0
 WORDS_LEFT, 0
 COUNT6,     0
 STORE_PAIR_PTR, STORE_PAIR
+SHIFT_RIGHT6_PTR, SHIFT_RIGHT6
 PRINT_STR_PTR,    PRINT_STR
 PRINT_FIXED_PTR,  PRINT_FIXED
 PRINT_CRLF_PTR,   PRINT_CRLF
@@ -100,6 +101,9 @@ DECODE_LABEL,
         CLA CLL
         TAD I HDR_PTR
         JMS I STORE_PAIR_PTR
+        CLA
+        TAD DST_PTR
+        DCA LBL_PTR
         ISZ WORDS_LEFT
         JMP DECODE_LABEL
 
@@ -119,6 +123,9 @@ DECODE_FORMAT,
         CLA CLL
         TAD I HDR_PTR
         JMS I STORE_PAIR_PTR
+        CLA
+        TAD DST_PTR
+        DCA FMT_PTR
         ISZ WORDS_LEFT
         JMP DECODE_FORMAT
 
@@ -205,18 +212,16 @@ RD_WAIT,
 STORE_PAIR,
         0
         DCA WORD_TEMP
-        CLA CLL
+        CLA
         TAD WORD_TEMP
-        RAR; RAR; RAR
-        RAR; RAR; RAR
-        AND SIXMASK
+        JMS I SHIFT_RIGHT6_PTR
         JMS VALIDATE_CODE
         JMS I SIX_TO_ASCII_PTR
         DCA CHAR_TEMP
         CLA
         TAD CHAR_TEMP
         DCA I DST_PTR
-        CLA CLL
+        CLA
         TAD WORD_TEMP
         AND SIXMASK
         JMS VALIDATE_CODE
@@ -226,6 +231,23 @@ STORE_PAIR,
         TAD CHAR_TEMP
         DCA I DST_PTR
         JMP I STORE_PAIR
+
+SHIFT_RIGHT6,
+        0
+        CLL
+        RAR
+        CLL
+        RAR
+        CLL
+        RAR
+        CLL
+        RAR
+        CLL
+        RAR
+        CLL
+        RAR
+        AND SIXMASK
+        JMP I SHIFT_RIGHT6
 
 VALIDATE_CODE,
         0

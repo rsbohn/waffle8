@@ -22,6 +22,183 @@
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
 
+typedef struct {
+    uint32_t state[4];
+    uint32_t count[2];
+    unsigned char buffer[64];
+} md5_ctx;
+
+static void md5_transform(uint32_t state[4], const unsigned char block[64]);
+
+static void md5_init(md5_ctx *ctx) {
+    ctx->count[0] = ctx->count[1] = 0u;
+    ctx->state[0] = 0x67452301u;
+    ctx->state[1] = 0xEFCDAB89u;
+    ctx->state[2] = 0x98BADCFEu;
+    ctx->state[3] = 0x10325476u;
+}
+
+static void md5_update(md5_ctx *ctx, const unsigned char *input, size_t len) {
+    size_t index = (ctx->count[0] >> 3) & 0x3Fu;
+    uint32_t bit_len = (uint32_t)(len << 3);
+
+    ctx->count[0] += bit_len;
+    if (ctx->count[0] < bit_len) {
+        ctx->count[1]++;
+    }
+    ctx->count[1] += (uint32_t)(len >> 29);
+
+    size_t part_len = 64u - index;
+    size_t i = 0;
+
+    if (len >= part_len) {
+        memcpy(&ctx->buffer[index], input, part_len);
+        md5_transform(ctx->state, ctx->buffer);
+        for (i = part_len; i + 63u < len; i += 64u) {
+            md5_transform(ctx->state, &input[i]);
+        }
+        index = 0;
+    }
+
+    memcpy(&ctx->buffer[index], &input[i], len - i);
+}
+
+static void md5_encode(unsigned char *output, const uint32_t *input, size_t len) {
+    for (size_t i = 0, j = 0; j < len; ++i, j += 4u) {
+        output[j] = (unsigned char)(input[i] & 0xFFu);
+        output[j + 1u] = (unsigned char)((input[i] >> 8) & 0xFFu);
+        output[j + 2u] = (unsigned char)((input[i] >> 16) & 0xFFu);
+        output[j + 3u] = (unsigned char)((input[i] >> 24) & 0xFFu);
+    }
+}
+
+static void md5_decode(uint32_t *output, const unsigned char *input, size_t len) {
+    for (size_t i = 0, j = 0; j < len; ++i, j += 4u) {
+        output[i] = ((uint32_t)input[j]) | (((uint32_t)input[j + 1u]) << 8) |
+                    (((uint32_t)input[j + 2u]) << 16) | (((uint32_t)input[j + 3u]) << 24);
+    }
+}
+
+static void md5_final(unsigned char digest[16], md5_ctx *ctx) {
+    static const unsigned char padding[64] = {0x80};
+    unsigned char bits[8];
+
+    md5_encode(bits, ctx->count, 8u);
+
+    size_t index = (ctx->count[0] >> 3) & 0x3Fu;
+    size_t pad_len = (index < 56u) ? (56u - index) : (120u - index);
+    md5_update(ctx, padding, pad_len);
+    md5_update(ctx, bits, 8u);
+
+    md5_encode(digest, ctx->state, 16u);
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+#define F_MD5(x, y, z) (((x) & (y)) | ((~x) & (z)))
+#define G_MD5(x, y, z) (((x) & (z)) | ((y) & (~z)))
+#define H_MD5(x, y, z) ((x) ^ (y) ^ (z))
+#define I_MD5(x, y, z) ((y) ^ ((x) | (~z)))
+
+#define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+#define STEP_MD5(func, a, b, c, d, x, s, ac) \
+    do {                                     \
+        (a) += func((b), (c), (d)) + (x) + (uint32_t)(ac); \
+        (a) = ROTATE_LEFT((a), (s));         \
+        (a) += (b);                          \
+    } while (0)
+
+static void md5_transform(uint32_t state[4], const unsigned char block[64]) {
+    uint32_t a = state[0];
+    uint32_t b = state[1];
+    uint32_t c = state[2];
+    uint32_t d = state[3];
+    uint32_t x[16];
+
+    md5_decode(x, block, 64u);
+
+    STEP_MD5(F_MD5, a, b, c, d, x[0], 7, 0xd76aa478);
+    STEP_MD5(F_MD5, d, a, b, c, x[1], 12, 0xe8c7b756);
+    STEP_MD5(F_MD5, c, d, a, b, x[2], 17, 0x242070db);
+    STEP_MD5(F_MD5, b, c, d, a, x[3], 22, 0xc1bdceee);
+    STEP_MD5(F_MD5, a, b, c, d, x[4], 7, 0xf57c0faf);
+    STEP_MD5(F_MD5, d, a, b, c, x[5], 12, 0x4787c62a);
+    STEP_MD5(F_MD5, c, d, a, b, x[6], 17, 0xa8304613);
+    STEP_MD5(F_MD5, b, c, d, a, x[7], 22, 0xfd469501);
+    STEP_MD5(F_MD5, a, b, c, d, x[8], 7, 0x698098d8);
+    STEP_MD5(F_MD5, d, a, b, c, x[9], 12, 0x8b44f7af);
+    STEP_MD5(F_MD5, c, d, a, b, x[10], 17, 0xffff5bb1);
+    STEP_MD5(F_MD5, b, c, d, a, x[11], 22, 0x895cd7be);
+    STEP_MD5(F_MD5, a, b, c, d, x[12], 7, 0x6b901122);
+    STEP_MD5(F_MD5, d, a, b, c, x[13], 12, 0xfd987193);
+    STEP_MD5(F_MD5, c, d, a, b, x[14], 17, 0xa679438e);
+    STEP_MD5(F_MD5, b, c, d, a, x[15], 22, 0x49b40821);
+
+    STEP_MD5(G_MD5, a, b, c, d, x[1], 5, 0xf61e2562);
+    STEP_MD5(G_MD5, d, a, b, c, x[6], 9, 0xc040b340);
+    STEP_MD5(G_MD5, c, d, a, b, x[11], 14, 0x265e5a51);
+    STEP_MD5(G_MD5, b, c, d, a, x[0], 20, 0xe9b6c7aa);
+    STEP_MD5(G_MD5, a, b, c, d, x[5], 5, 0xd62f105d);
+    STEP_MD5(G_MD5, d, a, b, c, x[10], 9, 0x02441453);
+    STEP_MD5(G_MD5, c, d, a, b, x[15], 14, 0xd8a1e681);
+    STEP_MD5(G_MD5, b, c, d, a, x[4], 20, 0xe7d3fbc8);
+    STEP_MD5(G_MD5, a, b, c, d, x[9], 5, 0x21e1cde6);
+    STEP_MD5(G_MD5, d, a, b, c, x[14], 9, 0xc33707d6);
+    STEP_MD5(G_MD5, c, d, a, b, x[3], 14, 0xf4d50d87);
+    STEP_MD5(G_MD5, b, c, d, a, x[8], 20, 0x455a14ed);
+    STEP_MD5(G_MD5, a, b, c, d, x[13], 5, 0xa9e3e905);
+    STEP_MD5(G_MD5, d, a, b, c, x[2], 9, 0xfcefa3f8);
+    STEP_MD5(G_MD5, c, d, a, b, x[7], 14, 0x676f02d9);
+    STEP_MD5(G_MD5, b, c, d, a, x[12], 20, 0x8d2a4c8a);
+
+    STEP_MD5(H_MD5, a, b, c, d, x[5], 4, 0xfffa3942);
+    STEP_MD5(H_MD5, d, a, b, c, x[8], 11, 0x8771f681);
+    STEP_MD5(H_MD5, c, d, a, b, x[11], 16, 0x6d9d6122);
+    STEP_MD5(H_MD5, b, c, d, a, x[14], 23, 0xfde5380c);
+    STEP_MD5(H_MD5, a, b, c, d, x[1], 4, 0xa4beea44);
+    STEP_MD5(H_MD5, d, a, b, c, x[4], 11, 0x4bdecfa9);
+    STEP_MD5(H_MD5, c, d, a, b, x[7], 16, 0xf6bb4b60);
+    STEP_MD5(H_MD5, b, c, d, a, x[10], 23, 0xbebfbc70);
+    STEP_MD5(H_MD5, a, b, c, d, x[13], 4, 0x289b7ec6);
+    STEP_MD5(H_MD5, d, a, b, c, x[0], 11, 0xeaa127fa);
+    STEP_MD5(H_MD5, c, d, a, b, x[3], 16, 0xd4ef3085);
+    STEP_MD5(H_MD5, b, c, d, a, x[6], 23, 0x04881d05);
+    STEP_MD5(H_MD5, a, b, c, d, x[9], 4, 0xd9d4d039);
+    STEP_MD5(H_MD5, d, a, b, c, x[12], 11, 0xe6db99e5);
+    STEP_MD5(H_MD5, c, d, a, b, x[15], 16, 0x1fa27cf8);
+    STEP_MD5(H_MD5, b, c, d, a, x[2], 23, 0xc4ac5665);
+
+    STEP_MD5(I_MD5, a, b, c, d, x[0], 6, 0xf4292244);
+    STEP_MD5(I_MD5, d, a, b, c, x[7], 10, 0x432aff97);
+    STEP_MD5(I_MD5, c, d, a, b, x[14], 15, 0xab9423a7);
+    STEP_MD5(I_MD5, b, c, d, a, x[5], 21, 0xfc93a039);
+    STEP_MD5(I_MD5, a, b, c, d, x[12], 6, 0x655b59c3);
+    STEP_MD5(I_MD5, d, a, b, c, x[3], 10, 0x8f0ccc92);
+    STEP_MD5(I_MD5, c, d, a, b, x[10], 15, 0xffeff47d);
+    STEP_MD5(I_MD5, b, c, d, a, x[1], 21, 0x85845dd1);
+    STEP_MD5(I_MD5, a, b, c, d, x[8], 6, 0x6fa87e4f);
+    STEP_MD5(I_MD5, d, a, b, c, x[15], 10, 0xfe2ce6e0);
+    STEP_MD5(I_MD5, c, d, a, b, x[6], 15, 0xa3014314);
+    STEP_MD5(I_MD5, b, c, d, a, x[13], 21, 0x4e0811a1);
+    STEP_MD5(I_MD5, a, b, c, d, x[4], 6, 0xf7537e82);
+    STEP_MD5(I_MD5, d, a, b, c, x[11], 10, 0xbd3af235);
+    STEP_MD5(I_MD5, c, d, a, b, x[2], 15, 0x2ad7d2bb);
+    STEP_MD5(I_MD5, b, c, d, a, x[9], 21, 0xeb86d391);
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+
+    memset(x, 0, sizeof x);
+}
+
+#undef F_MD5
+#undef G_MD5
+#undef H_MD5
+#undef I_MD5
+#undef STEP_MD5
+
 struct monitor_runtime {
     pdp8_t *cpu;
     pdp8_kl8e_console_t *console;
@@ -229,7 +406,7 @@ static int load_srec_image(pdp8_t *cpu,
                            size_t *highest_address,
                            uint16_t *start_pc,
                            bool *start_pc_valid,
-                           uint32_t *checksum_out) {
+                           unsigned char *md5_out) {
     if (!cpu || !path) {
         return -1;
     }
@@ -240,11 +417,7 @@ static int load_srec_image(pdp8_t *cpu,
 
     const size_t memory_bytes = memory_words * 2u;
 
-    if (checksum_out) {
-        *checksum_out = 0u;
-    }
-
-    FILE *fp = fopen(path, "r");
+    FILE *fp = fopen(path, "rb");
     if (!fp) {
         monitor_console_printf("Unable to open '%s' for reading: %s\n", path, strerror(errno));
         return -1;
@@ -265,10 +438,14 @@ static int load_srec_image(pdp8_t *cpu,
     bool start_seen = false;
     unsigned long start_byte_address = 0ul;
 
-    uint32_t computed_checksum = 0u;
+    md5_ctx md5;
+    md5_init(&md5);
 
     while (fgets(line, sizeof line, fp) != NULL) {
         char *cursor = line;
+        size_t raw_len = strlen(cursor);
+        md5_update(&md5, (const unsigned char *)cursor, raw_len);
+
         while (*cursor && isspace((unsigned char)*cursor)) {
             ++cursor;
         }
@@ -367,7 +544,6 @@ static int load_srec_image(pdp8_t *cpu,
                     return -1;
                 }
 
-                computed_checksum += (uint32_t)(value & 0xFFul);
                 const size_t absolute = base_address + i;
                 if (absolute >= memory_bytes) {
                     monitor_console_printf(
@@ -473,8 +649,11 @@ static int load_srec_image(pdp8_t *cpu,
             path);
     }
 
-    if (checksum_out) {
-        *checksum_out = computed_checksum;
+    unsigned char digest_bytes[16];
+    md5_final(digest_bytes, &md5);
+
+    if (md5_out) {
+        memcpy(md5_out, digest_bytes, sizeof digest_bytes);
     }
 
     free(byte_data);
@@ -968,7 +1147,7 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
     size_t highest_address = 0;
     uint16_t start_address = 0;
     bool start_valid = false;
-    uint32_t checksum = 0u;
+    unsigned char md5_bytes[16];
 
     if (load_srec_image(runtime->cpu,
                         path,
@@ -977,7 +1156,7 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                         &highest_address,
                         &start_address,
                         &start_valid,
-                        &checksum) != 0) {
+                        md5_bytes) != 0) {
         return MONITOR_COMMAND_ERROR;
     }
 
@@ -987,7 +1166,12 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
     }
     monitor_console_puts(".");
 
-    monitor_console_printf("SREC checksum (%s): 0x%08" PRIX32 "\n", path, checksum);
+    char md5_hex[33];
+    for (size_t i = 0; i < sizeof md5_bytes; ++i) {
+        snprintf(&md5_hex[i * 2u], 3u, "%02x", md5_bytes[i] & 0xFFu);
+    }
+    md5_hex[32] = '\0';
+    monitor_console_printf("SREC md5 (%s): %s\n", path, md5_hex);
 
     if (start_valid) {
         pdp8_api_set_pc(runtime->cpu, start_address & 0x0FFFu);
@@ -1457,7 +1641,7 @@ int main(int argc, char **argv) {
         size_t highest_address = 0;
         uint16_t start_address = 0;
         bool start_valid = false;
-        uint32_t checksum = 0u;
+        unsigned char md5_bytes[16];
 
         if (load_srec_image(runtime.cpu,
                             startup_image,
@@ -1466,7 +1650,7 @@ int main(int argc, char **argv) {
                             &highest_address,
                             &start_address,
                             &start_valid,
-                            &checksum) != 0) {
+                            md5_bytes) != 0) {
             exit_code = EXIT_FAILURE;
             goto shutdown;
         }
@@ -1477,7 +1661,12 @@ int main(int argc, char **argv) {
         }
         monitor_console_puts(".");
 
-        monitor_console_printf("SREC checksum (%s): 0x%08" PRIX32 "\n", startup_image, checksum);
+        char md5_hex[33];
+        for (size_t i = 0; i < sizeof md5_bytes; ++i) {
+            snprintf(&md5_hex[i * 2u], 3u, "%02x", md5_bytes[i] & 0xFFu);
+        }
+        md5_hex[32] = '\0';
+        monitor_console_printf("SREC md5 (%s): %s\n", startup_image, md5_hex);
 
         if (start_valid) {
             pdp8_api_set_pc(runtime.cpu, start_address & 0x0FFFu);
