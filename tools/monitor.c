@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -227,7 +228,8 @@ static int load_srec_image(pdp8_t *cpu,
                            size_t *words_loaded,
                            size_t *highest_address,
                            uint16_t *start_pc,
-                           bool *start_pc_valid) {
+                           bool *start_pc_valid,
+                           uint32_t *checksum_out) {
     if (!cpu || !path) {
         return -1;
     }
@@ -237,6 +239,10 @@ static int load_srec_image(pdp8_t *cpu,
     }
 
     const size_t memory_bytes = memory_words * 2u;
+
+    if (checksum_out) {
+        *checksum_out = 0u;
+    }
 
     FILE *fp = fopen(path, "r");
     if (!fp) {
@@ -258,6 +264,8 @@ static int load_srec_image(pdp8_t *cpu,
     bool have_data = false;
     bool start_seen = false;
     unsigned long start_byte_address = 0ul;
+
+    uint32_t computed_checksum = 0u;
 
     while (fgets(line, sizeof line, fp) != NULL) {
         char *cursor = line;
@@ -359,6 +367,7 @@ static int load_srec_image(pdp8_t *cpu,
                     return -1;
                 }
 
+                computed_checksum += (uint32_t)(value & 0xFFul);
                 const size_t absolute = base_address + i;
                 if (absolute >= memory_bytes) {
                     monitor_console_printf(
@@ -462,6 +471,10 @@ static int load_srec_image(pdp8_t *cpu,
         monitor_console_printf(
             "Warning: Incomplete word(s) encountered while reading '%s'; skipped those entries.\n",
             path);
+    }
+
+    if (checksum_out) {
+        *checksum_out = computed_checksum;
     }
 
     free(byte_data);
@@ -955,6 +968,7 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
     size_t highest_address = 0;
     uint16_t start_address = 0;
     bool start_valid = false;
+    uint32_t checksum = 0u;
 
     if (load_srec_image(runtime->cpu,
                         path,
@@ -962,7 +976,8 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                         &words_loaded,
                         &highest_address,
                         &start_address,
-                        &start_valid) != 0) {
+                        &start_valid,
+                        &checksum) != 0) {
         return MONITOR_COMMAND_ERROR;
     }
 
@@ -971,6 +986,8 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
         monitor_console_printf(" (last %04zo)", highest_address);
     }
     monitor_console_puts(".");
+
+    monitor_console_printf("SREC checksum (%s): 0x%08" PRIX32 "\n", path, checksum);
 
     if (start_valid) {
         pdp8_api_set_pc(runtime->cpu, start_address & 0x0FFFu);
@@ -1440,6 +1457,7 @@ int main(int argc, char **argv) {
         size_t highest_address = 0;
         uint16_t start_address = 0;
         bool start_valid = false;
+        uint32_t checksum = 0u;
 
         if (load_srec_image(runtime.cpu,
                             startup_image,
@@ -1447,7 +1465,8 @@ int main(int argc, char **argv) {
                             &words_loaded,
                             &highest_address,
                             &start_address,
-                            &start_valid) != 0) {
+                            &start_valid,
+                            &checksum) != 0) {
             exit_code = EXIT_FAILURE;
             goto shutdown;
         }
@@ -1457,6 +1476,8 @@ int main(int argc, char **argv) {
             monitor_console_printf(" (last %04zo)", highest_address);
         }
         monitor_console_puts(".");
+
+        monitor_console_printf("SREC checksum (%s): 0x%08" PRIX32 "\n", startup_image, checksum);
 
         if (start_valid) {
             pdp8_api_set_pc(runtime.cpu, start_address & 0x0FFFu);
