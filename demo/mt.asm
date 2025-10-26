@@ -18,7 +18,10 @@ UNIT_MASK,  0007
 NEG27,      -27
 NEG32,      -32
 NEG50,      -50
+NEG30,      -30
+NEG31,      -31
 NEG52,      -52
+NEG1,       -1
 ONE,        1
 DIGIT_BASE, 0060
 HEADER_BAD, 0
@@ -77,9 +80,11 @@ READ_HDR,
         / Prepare pointers for decoding
         CLA CLL
         TAD HEADER_ADDR
+        TAD NEG1
         DCA HDR_PTR             / Reset header pointer
         CLA CLL
         TAD LABEL_ADDR
+        TAD NEG1
         DCA LBL_PTR
         CLA
         TAD LBL_PTR
@@ -100,6 +105,7 @@ DECODE_LABEL,
 
         CLA CLL
         TAD FORMAT_ADDR
+        TAD NEG1
         DCA FMT_PTR
         CLA
         TAD FMT_PTR
@@ -119,12 +125,14 @@ DECODE_FORMAT,
         / Output header banner and decoded text
         CLA CLL
         TAD TITLE_PTR
+        TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
         JMS I PRINT_CRLF_PTR
 
         CLA CLL
         TAD UNIT_MSG_PTR
+        TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
         CLA
@@ -141,11 +149,13 @@ DECODE_FORMAT,
 
         CLA CLL
         TAD LABEL_MSG_PTR
+        TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
 
         CLA CLL
         TAD LABEL_ADDR
+        TAD NEG1
         DCA STR_PTR
         CLA CLL
         TAD NEG6
@@ -155,11 +165,13 @@ DECODE_FORMAT,
 
         CLA CLL
         TAD FORMAT_MSG_PTR
+        TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
 
         CLA CLL
         TAD FORMAT_ADDR
+        TAD NEG1
         DCA STR_PTR
         CLA CLL
         TAD NEG6
@@ -193,7 +205,8 @@ RD_WAIT,
 STORE_PAIR,
         0
         DCA WORD_TEMP
-        CLA
+        CLA CLL
+        TAD WORD_TEMP
         RAR; RAR; RAR
         RAR; RAR; RAR
         AND SIXMASK
@@ -219,27 +232,44 @@ VALIDATE_CODE,
         DCA SIX_INDEX
         CLA
         TAD SIX_INDEX
-        SNA
-        JMP VC_OK
+        SZA
+        JMP VC_NONZERO
         CLA
         TAD SIX_INDEX
-        TAD NEG27
+        JMP I VALIDATE_CODE
+
+VC_NONZERO,
+        CLA
+        TAD SIX_INDEX
+        TAD NEG30
+        SZA
+        JMP VC_OK         / value == 30
         SMA
-        JMP VC_OK
+        JMP VC_OK         / value < 30 (letters, punctuation)
+
+        CLA
+        TAD SIX_INDEX
+        TAD NEG31
+        SZA
+        JMP VC_OK         / value == 31
+
         CLA
         TAD SIX_INDEX
         TAD NEG32
         SMA
-        JMP VC_BAD
+        JMP VC_BAD        / (should not happen but guard)
+
         CLA
         TAD SIX_INDEX
-        TAD NEG52
+        TAD NEG50
         SPA
-        JMP VC_BAD
+        JMP VC_BAD        / value >= 50
+
 VC_OK,
         CLA
         TAD SIX_INDEX
         JMP I VALIDATE_CODE
+
 VC_BAD,
         ISZ HEADER_BAD
         CLA
