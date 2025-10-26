@@ -100,6 +100,8 @@ lib.pdp8_api_set_switch_register.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
 lib.pdp8_api_set_switch_register.restype = None
 lib.pdp8_api_get_switch_register.argtypes = [ctypes.c_void_p]
 lib.pdp8_api_get_switch_register.restype = ctypes.c_uint16
+lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
+lib.pdp8_api_is_halted.restype = ctypes.c_int
 
 cpu = lib.pdp8_api_create(0x1000)  # 4K core, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
 cycles_counter = 0
@@ -280,10 +282,14 @@ def get_regs():
     pc = lib.pdp8_api_get_pc(cpu)
     ac = lib.pdp8_api_get_ac(cpu)
     lk = lib.pdp8_api_get_link(cpu)
+    sw = lib.pdp8_api_get_switch_register(cpu)
+    halted = lib.pdp8_api_is_halted(cpu)
     return jsonify({
         "pc": to_octal(pc),
         "ac": to_octal(ac),
         "link": 1 if lk else 0,
+        "switch": to_octal(sw),
+        "halted": bool(halted),
         "cycles": cycles_counter  # local counter
     })
 

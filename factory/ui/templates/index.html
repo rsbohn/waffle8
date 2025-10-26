@@ -13,18 +13,6 @@
     </header>
 
     <main class="layout">
-      <section class="card card--wide" id="rom-loader">
-        <h2>ROM Loader</h2>
-        <p>Select a Motorola S-record image to load into the emulator.</p>
-        <form id="rom-form">
-          <label class="input-label" for="rom-file">S-record file</label>
-          <input type="file" id="rom-file" name="rom" accept=".srec,.SREC,.txt" />
-          <button type="submit" class="button button--primary">Upload</button>
-          <p class="hint">The loader installs a JMP I 20 reset vector automatically.</p>
-        </form>
-        <div class="status-block" id="rom-status" aria-live="polite"></div>
-      </section>
-
       <section class="card" id="execution-controls">
         <h2>Execution</h2>
         <div class="button-group">
@@ -40,31 +28,37 @@
 
       <section class="card" id="registers">
         <h2>Registers</h2>
-        <dl class="register-grid" aria-live="polite">
-          <div>
-            <dt>PC</dt>
-            <dd id="reg-pc">0000</dd>
+        <div class="register-strip" aria-live="polite">
+          <div class="register-item">
+            <span class="register-label">PC</span>
+            <span class="register-value" id="reg-pc">0000</span>
           </div>
-          <div>
-            <dt>AC</dt>
-            <dd id="reg-ac">0000</dd>
+          <div class="register-item">
+            <span class="register-label">Link</span>
+            <span class="register-value" id="reg-link">0</span>
           </div>
-          <div>
-            <dt>Link</dt>
-            <dd id="reg-link">0</dd>
+          <div class="register-item">
+            <span class="register-label">AC</span>
+            <span class="register-value" id="reg-ac">0000</span>
           </div>
-          <div>
-            <dt>Switch</dt>
-            <dd id="reg-switch">0000</dd>
+        </div>
+        <div class="register-strip">
+          <div class="register-item">
+            <span class="register-label">Halt</span>
+            <span class="register-value" id="reg-halt" data-state="running">RUN</span>
           </div>
-        </dl>
+          <div class="register-item">
+            <span class="register-label">Switch</span>
+            <span class="register-value" id="reg-switch">0000</span>
+          </div>
+        </div>
         <button type="button" class="button button--secondary" data-action="refresh-registers">
           Refresh
         </button>
       </section>
 
       <section class="card card--stacked" id="console-output">
-        <h2>Teleprinter Output</h2>
+        <h2>Console</h2>
         <pre id="teleprinter-log" class="log-window" aria-live="polite"></pre>
         <div class="input-row">
           <label for="teleprinter-input" class="input-label">Keyboard input</label>
@@ -78,26 +72,16 @@
         <pre id="printer-log" class="log-window" aria-live="polite"></pre>
       </section>
 
-      <section class="card card--wide" id="factory-dashboard">
-        <h2>Factory Dashboard</h2>
-        <div class="dashboard-grid">
-          <article class="dashboard-panel">
-            <h3>Production</h3>
-            <p class="placeholder">Coming soon: waffle throughput metrics.</p>
-          </article>
-          <article class="dashboard-panel">
-            <h3>Ovens</h3>
-            <p class="placeholder">Status indicators for 16 irons will render here.</p>
-          </article>
-          <article class="dashboard-panel">
-            <h3>Packaging</h3>
-            <p class="placeholder">Visualize conveyor load and packaging queue.</p>
-          </article>
-          <article class="dashboard-panel">
-            <h3>Environment</h3>
-            <p class="placeholder">Temperature, humidity, and cold storage telemetry.</p>
-          </article>
-        </div>
+      <section class="card" id="rom-loader">
+        <h2>ROM Loader</h2>
+        <p>Paste a Motorola S-record into the buffer and upload it to memory.</p>
+        <form id="rom-form">
+          <label class="input-label" for="rom-text">S-record data</label>
+          <textarea id="rom-text" name="rom" rows="10" spellcheck="false" placeholder="S00600004844521B&#10;S113000000000000000000000000000000000000C4&#10;S5030000FA"></textarea>
+          <button type="submit" class="button button--primary">Upload</button>
+          <p class="hint">Whitespace is ignored; a JMP I 20 reset vector is still injected automatically.</p>
+        </form>
+        <div class="status-block" id="rom-status" aria-live="polite"></div>
       </section>
     </main>
 

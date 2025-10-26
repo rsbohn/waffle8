@@ -9,6 +9,7 @@ class FactoryUI {
       pc: document.getElementById("reg-pc"),
       ac: document.getElementById("reg-ac"),
       link: document.getElementById("reg-link"),
+      halt: document.getElementById("reg-halt"),
       switch: document.getElementById("reg-switch"),
     };
     this.teleprinterLog = document.getElementById("teleprinter-log");
@@ -39,10 +40,10 @@ class FactoryUI {
             this.queueCommand("/reset");
             break;
           case "step":
-            this.queueCommand("/trace", { cycles: 1 });
+            this.queueTrace(1);
             break;
           case "run":
-            this.queueCommand("/trace", { cycles: this.readCycleBudget() });
+            this.queueTrace(this.readCycleBudget());
             break;
           case "halt":
             this.queueCommand("/halt");
@@ -60,22 +61,34 @@ class FactoryUI {
     });
   }
 
+  async queueTrace(cycles) {
+    const params = new URLSearchParams();
+    if (typeof cycles === "number" && Number.isFinite(cycles)) {
+      params.set("cycles", String(Math.max(1, Math.floor(cycles))));
+    }
+    const suffix = params.toString();
+    return this.queueCommand(`/trace${suffix ? `?${suffix}` : ""}`);
+  }
+
   async handleRomUpload() {
-    const input = /** @type {HTMLInputElement|null} */ (document.getElementById("rom-file"));
-    if (!input || !input.files || input.files.length === 0) {
-      this.setStatus(this.romStatus, "Select a ROM first.");
+    const field = /** @type {HTMLTextAreaElement|null} */ (document.getElementById("rom-text"));
+    if (!field) {
       return;
     }
 
-    const file = input.files[0];
-    const formData = new FormData();
-    formData.append("file", file);
+    const raw = field.value;
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      this.setStatus(this.romStatus, "Paste S-record data before uploading.");
+      return;
+    }
 
-    this.setStatus(this.romStatus, `Uploading ${file.name}…`);
+    this.setStatus(this.romStatus, "Uploading S-record payload…");
     try {
       const response = await fetch("/loader", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "text/plain" },
+        body: raw,
       });
       if (!response.ok) {
         const text = await response.text();
@@ -103,7 +116,6 @@ class FactoryUI {
     }
     return Math.min(value, 100000);
   }
-
   async queueCommand(endpoint, body = undefined) {
     this.setStatus(this.executionStatus, "Sending command…");
     try {
@@ -157,6 +169,10 @@ class FactoryUI {
     }
     if (typeof data.link !== "undefined" && this.registerElements.link) {
       this.registerElements.link.textContent = data.link;
+    }
+    if (typeof data.halted !== "undefined" && this.registerElements.halt) {
+      this.registerElements.halt.textContent = data.halted ? "HALT" : "RUN";
+      this.registerElements.halt.dataset.state = data.halted ? "halted" : "running";
     }
     if (data.switch && this.registerElements.switch) {
       this.registerElements.switch.textContent = data.switch;
