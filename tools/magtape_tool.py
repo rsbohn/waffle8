@@ -5,16 +5,16 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import os
 import sys
 import textwrap
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Sequence
 
 SENTINEL_WORD = 0xFFFF
 WORD_MASK = 0x0FFF
+SIXBIT_MASK = 0x3F
 
 
 @dataclass
@@ -149,6 +149,133 @@ def command_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def sixbit_to_char(value: int) -> str:
+    lookup = {
+        0: " ",
+        30: "\r",
+        31: "\n",
+        42: "!",
+        43: ",",
+        44: "-",
+        45: ".",
+        46: "'",
+        47: ":",
+        48: ";",
+        49: "?",
+    }
+    if 1 <= value <= 26:
+        return chr(value + 64)
+    if 32 <= value <= 41:
+        return chr(value - 32 + ord("0"))
+    return lookup.get(value, "?")
+
+
+def decode_sixbit_word(word: int) -> tuple[str, str]:
+    high = (word >> 6) & SIXBIT_MASK
+    low = word & SIXBIT_MASK
+    return sixbit_to_char(high), sixbit_to_char(low)
+
+
+def decode_header_words(words: Sequence[int]) -> tuple[str, str]:
+    if len(words) < 6:
+        raise ValueError("Header requires at least six words")
+    label_chars: List[str] = []
+    format_chars: List[str] = []
+    for idx in range(3):
+        label_chars.extend(decode_sixbit_word(words[idx]))
+    for idx in range(3, 6):
+        format_chars.extend(decode_sixbit_word(words[idx]))
+    return "".join(label_chars).rstrip(), "".join(format_chars).rstrip()
+
+
+def decode_sixbit_payload(words: Sequence[int], start_index: int = 6) -> tuple[List[str], str]:
+    rendered: List[str] = []
+    chars: List[str] = []
+    for idx, word in enumerate(words, start=start_index):
+        high, low = decode_sixbit_word(word)
+        pair = f"{(high + low)!r}"
+        rendered.append(f"{idx:04}: {pair}")
+        chars.extend((high, low))
+    return rendered, "".join(chars)
+
+
+def decode_ascii_payload(words: Sequence[int], start_index: int = 6) -> tuple[List[str], str]:
+    rendered: List[str] = []
+    chars: List[str] = []
+    for idx, word in enumerate(words, start=start_index):
+        char = chr(word & 0xFF)
+        rendered.append(f"{idx:04}: {char!r}")
+        chars.append(char)
+    return rendered, "".join(chars)
+
+
+def print_raw_words(words: Sequence[int], per_line: int = 8) -> None:
+    for start in range(0, len(words), per_line):
+        chunk = words[start : start + per_line]
+        octal_words = " ".join(f"{word:04o}" for word in chunk)
+        print(f"{start:04}: {octal_words}")
+
+
+def command_inspect(args: argparse.Namespace) -> int:
+    record = read_record(Path(args.record))
+    if not args.raw and not args.head and not args.decode:
+        print("Nothing to do: specify --raw, --head, and/or --decode.", file=sys.stderr)
+        return 1
+
+    if record.partial:
+        print("Warning: record is partial; data may be truncated.", file=sys.stderr)
+
+    header: tuple[str, str] | None = None
+    if args.head or args.decode:
+        try:
+            header = decode_header_words(record.words)
+        except ValueError as exc:
+            print(f"Unable to decode header: {exc}", file=sys.stderr)
+            header = None
+
+    header_printed = False
+    if args.head and header:
+        label, data_format = header
+        print("Header:")
+        print(f"  Label     : {label}")
+        print(f"  Data format: {data_format}")
+        header_printed = True
+
+    if args.decode:
+        if not header:
+            print("Unable to decode payload without header information.", file=sys.stderr)
+        else:
+            label, data_format = header
+            if not header_printed:
+                print("Header:")
+                print(f"  Label     : {label}")
+                print(f"  Data format: {data_format}")
+                header_printed = True
+            payload = record.words[6:]
+            format_key = data_format.strip().upper()
+            print(f"Decoded data ({format_key or 'UNKNOWN'}):")
+            if not payload:
+                print("  (no payload words)")
+            elif format_key == "SIXBIT":
+                rendered, text = decode_sixbit_payload(payload)
+                for line in rendered:
+                    print(line)
+                print(f"Combined: {text!r}")
+            elif format_key == "ASCII":
+                rendered, text = decode_ascii_payload(payload)
+                for line in rendered:
+                    print(line)
+                print(f"Combined: {text!r}")
+            else:
+                print(f"  Unsupported data format '{data_format}'.")
+
+    if args.raw:
+        print("Words (octal):")
+        print_raw_words(record.words)
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inspect and extract PDP-8 magtape records.",
@@ -188,6 +315,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only include the most recent session (records with matching timestamps)",
     )
     bundle_parser.set_defaults(func=command_bundle)
+
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect record contents")
+    inspect_parser.add_argument("record", help="Path to a .tap record file")
+    inspect_parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Print all 12-bit words in octal (eight per line)",
+    )
+    inspect_parser.add_argument(
+        "--head",
+        action="store_true",
+        help="Decode and print the six-word magtape header (label + data format)",
+    )
+    inspect_parser.add_argument(
+        "--decode",
+        action="store_true",
+        help="Decode payload according to the header data format",
+    )
+    inspect_parser.set_defaults(func=command_inspect)
 
     return parser
 

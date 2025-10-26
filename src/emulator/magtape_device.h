@@ -25,6 +25,21 @@ typedef struct pdp8_magtape_device pdp8_magtape_device_t;
 #define PDP8_MAGTAPE_INSTR(bits) \
     (PDP8_MAGTAPE_IOT_BASE | (uint16_t)((bits) & 0x3Fu))
 
+#define PDP8_MAGTAPE_SIXBIT_PER_WORD 2u
+#define PDP8_MAGTAPE_SIXBIT_WORDS(char_count) \
+    (((char_count) + PDP8_MAGTAPE_SIXBIT_PER_WORD - 1u) / PDP8_MAGTAPE_SIXBIT_PER_WORD)
+#define PDP8_MAGTAPE_HEADER_LABEL_CHARS 6u
+#define PDP8_MAGTAPE_HEADER_LABEL_WORDS \
+    PDP8_MAGTAPE_SIXBIT_WORDS(PDP8_MAGTAPE_HEADER_LABEL_CHARS)
+#define PDP8_MAGTAPE_HEADER_DATA_FORMAT_CHARS 6u
+#define PDP8_MAGTAPE_HEADER_DATA_FORMAT_WORDS \
+    PDP8_MAGTAPE_SIXBIT_WORDS(PDP8_MAGTAPE_HEADER_DATA_FORMAT_CHARS)
+
+struct pdp8_magtape_record_header {
+    uint16_t label[PDP8_MAGTAPE_HEADER_LABEL_WORDS];
+    uint16_t data_format[PDP8_MAGTAPE_HEADER_DATA_FORMAT_WORDS];
+};
+
 struct pdp8_magtape_unit_params {
     unsigned unit_number;
     const char *path;

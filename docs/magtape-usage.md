@@ -131,6 +131,36 @@ magtape new 1
 - **Records**: Each file represents one tape record
 - **End conditions**: End-of-record when file ends, end-of-tape after last file
 
+### Record Header Layout
+Every magtape record begins with a 6-word header encoded in SIXBIT:
+
+1. Three words for the six-character label (two SIXBIT characters per word)
+2. Three words for the six-character data format field
+
+Common format values:
+- `SIXBIT` – payload contains pairs of SIXBIT characters packed into 12-bit words
+- `ASCII` – payload contains 8-bit characters stored in 12-bit words (low byte in bits 0–7)
+
+After the header comes the payload words followed by the 0xFFFF sentinel. The first 16-bit word
+of the file is the declared payload length (header + body, excluding the sentinel).
+
+### Inspecting Records from the Host
+Use `tools/magtape_tool.py` to explore `.tap` files:
+
+```bash
+# Show labels/data formats without touching the payload
+python3 tools/magtape_tool.py inspect magtape/demo-header.tap --head
+
+# Dump 12-bit words in octal
+python3 tools/magtape_tool.py inspect magtape/demo-header.tap --raw
+
+# Decode according to the header (SIXBIT pairs or ASCII bytes)
+python3 tools/magtape_tool.py inspect magtape/demo-header.tap --decode
+```
+
+`--decode` prints each payload word alongside a readable representation and includes the combined
+text stream for convenience.
+
 ## Available Demo Files
 Unit 0 provides access to all files in the `demo/` directory:
 - `cal.srec` - Calendar program
@@ -154,3 +184,31 @@ The SENSE operation returns status in the AC:
 3. Unit 0 is read-only (write operations will error)
 4. Unit 1 creates new files - use `magtape new 1` between logical records
 5. Rewind units as needed to restart from beginning
+
+### Sample Host Tapes
+- `magtape/demo-header.tap`: SIXBIT payload with label `MTDEMO` and data format `SIXBIT`
+- `magtape/demo-hello-ascii.tap`: ASCII payload with label `ASCII0` and the text `Hello from ASCII tape`
+
+### Web UI Integration
+`tools/webdp8.py` now creates a writable magtape controller at startup and mounts
+`./magtape` as unit 0. Launch the web UI (`python3 tools/webdp8.py`) and use
+`demo/mt.asm` plus the new host samples to experiment with headers and payloads
+directly from the browser.
+
+### PDP-8 Utility: `demo/mt.asm`
+The `demo/mt.asm` program runs on the PDP-8 console to inspect the first record on
+magtape unit 0. After assembling (`python3 tools/pdp8_asm.py demo/mt.asm`) and
+loading the resulting image in the monitor or web UI:
+
+1. Ensure the KL8E teleprinter is attached (the monitor and web UI do this by default).
+2. Set the switch register to the desired unit number (octal 0-7) before running; the
+   program samples `S` to pick a unit (`switch 1` selects unit 1, etc.).
+2. Run the program at address `0200` (octal).
+3. The utility rewinds unit 0, reads the six-word header, and prints the decoded label
+   and data format via the teleprinter.
+
+If the first record lacks a SIXBIT header (legacy `.srec` payloads), the utility reports
+that condition instead of printing garbage.
+
+This is handy for confirming headers directly from within the emulator before
+inspecting payload records with host tooling.

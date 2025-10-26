@@ -73,6 +73,28 @@ lib.pdp8_line_printer_attach.restype = ctypes.c_int
 lib.pdp8_line_printer_set_column_limit.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
 lib.pdp8_line_printer_set_column_limit.restype = ctypes.c_int
 
+class MagtapeUnitParams(ctypes.Structure):
+    _fields_ = [
+        ("unit_number", ctypes.c_uint),
+        ("path", ctypes.c_char_p),
+        ("write_protected", ctypes.c_bool),
+    ]
+
+try:
+    lib.pdp8_magtape_device_create.argtypes = []
+    lib.pdp8_magtape_device_create.restype = ctypes.c_void_p
+    lib.pdp8_magtape_device_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_magtape_device_destroy.restype = None
+    lib.pdp8_magtape_device_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_magtape_device_attach.restype = ctypes.c_int
+    lib.pdp8_magtape_device_configure_unit.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(MagtapeUnitParams),
+    ]
+    lib.pdp8_magtape_device_configure_unit.restype = ctypes.c_int
+except AttributeError:
+    pass
+
 # Switch register access
 lib.pdp8_api_set_switch_register.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
 lib.pdp8_api_set_switch_register.restype = None
@@ -81,6 +103,44 @@ lib.pdp8_api_get_switch_register.restype = ctypes.c_uint16
 
 cpu = lib.pdp8_api_create(0x1000)  # 4K core, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
 cycles_counter = 0
+
+magtape_dir = ROOT / "magtape"
+_magtape_obj = None
+_magtape_path_bytes: bytes | None = None
+
+try:
+    magtape_dir.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+
+try:
+    _magtape_obj = lib.pdp8_magtape_device_create()
+except AttributeError:
+    _magtape_obj = None
+
+if _magtape_obj:
+    try:
+        attach_rc = lib.pdp8_magtape_device_attach(cpu, _magtape_obj)
+    except Exception:
+        attach_rc = -1
+    if attach_rc != 0:
+        try:
+            lib.pdp8_magtape_device_destroy(_magtape_obj)
+        except Exception:
+            pass
+        _magtape_obj = None
+        _magtape_path_bytes = None
+    else:
+        _magtape_path_bytes = str(magtape_dir.resolve()).encode("utf-8")
+        params = MagtapeUnitParams(0, _magtape_path_bytes, False)
+        rc = lib.pdp8_magtape_device_configure_unit(_magtape_obj, ctypes.byref(params))
+        if rc != 0:
+            try:
+                lib.pdp8_magtape_device_destroy(_magtape_obj)
+            except Exception:
+                pass
+            _magtape_obj = None
+            _magtape_path_bytes = None
 
 # Console / printer capture state
 _libc = None

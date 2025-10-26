@@ -11,5 +11,6 @@ __pycache__
 monitor
 checkpoint/*
 magtape/*
+!magtape/demo-hello-ascii.tap
 tests/pdp8_tests
 trace-args
