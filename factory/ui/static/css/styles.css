@@ -80,7 +80,7 @@ body {
 }
 
 .card--stacked {
-    min-height: 240px;
+    min-height: 320px;
 }
 
 .card h2 {
@@ -229,21 +229,17 @@ textarea {
     border: 1px solid var(--color-border);
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 0.9rem;
+    line-height: 1.5;
     overflow-y: auto;
     white-space: pre-wrap;
-    max-height: 320px;
+    min-height: 7.5em;
 }
 
 .input-row {
     display: grid;
     gap: 0.75rem;
     grid-template-columns: 1fr auto;
-    align-items: end;
-}
-
-.input-row .input-label {
-    grid-column: 1 / -1;
-    margin-bottom: 0.15rem;
+    align-items: center;
 }
 
 .app-footer {

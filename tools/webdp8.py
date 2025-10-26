@@ -49,6 +49,8 @@ lib.pdp8_api_write_mem.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_ui
 lib.pdp8_api_write_mem.restype = ctypes.c_int
 lib.pdp8_api_step.argtypes = [ctypes.c_void_p]
 lib.pdp8_api_step.restype = ctypes.c_int
+lib.pdp8_api_set_halt.argtypes = [ctypes.c_void_p]
+lib.pdp8_api_set_halt.restype = None
 lib.pdp8_api_clear_halt.argtypes = [ctypes.c_void_p]
 lib.pdp8_api_clear_halt.restype = None
 
@@ -104,6 +106,7 @@ lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
 lib.pdp8_api_is_halted.restype = ctypes.c_int
 
 cpu = lib.pdp8_api_create(0x1000)  # 4K core, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
+lib.pdp8_api_set_halt(cpu)  # Start with HALT asserted
 cycles_counter = 0
 
 magtape_dir = ROOT / "magtape"
@@ -276,6 +279,26 @@ def post_loader():
 
     return jsonify({"written": written, "start": to_octal(start_word) if start_word is not None else None})
 
+# ---------- /halt ----------
+@app.post("/halt")
+def post_halt():
+    """Assert the HALT flag (sticky until cleared)."""
+    try:
+        lib.pdp8_api_set_halt(cpu)
+        return jsonify({"halted": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+# ---------- /continue ----------
+@app.post("/continue")
+def post_continue():
+    """Clear the HALT flag to resume execution."""
+    try:
+        lib.pdp8_api_clear_halt(cpu)
+        return jsonify({"halted": False})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
 # ---------- /regs ----------
 @app.get("/regs")
 def get_regs():
@@ -364,6 +387,7 @@ def get_mem():
 @app.get("/output/teleprinter")
 def get_teleprinter_output():
     """Return and consume available teleprinter output recorded by the KL8E console."""
+    global _tele_last_pos
     # Prefer reading the teleprinter temp file if available (non-destructive
     # read). If not present, fall back to popping the console internal buffer.
     peek = request.args.get("peek", "0") in ("1", "true", "True")
@@ -486,11 +510,6 @@ def get_trace():
     global cycles_counter
 
     try:
-        # Ensure any previously-set HLT condition is cleared before tracing.
-        # Tests and other frontends call `pdp8_api_clear_halt` when they want to
-        # resume execution; do the same here so /trace always attempts to run.
-        lib.pdp8_api_clear_halt(cpu)
-
         # optional start PC override
         if "start" in request.args:
             start_pc = parse_num(request.args["start"]) & 0o7777

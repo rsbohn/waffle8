@@ -16,12 +16,15 @@ class FactoryUI {
     this.printerLog = document.getElementById("printer-log");
     this.teleprinterInput = document.getElementById("teleprinter-input");
     this.cycleInput = document.getElementById("cycle-count");
+    this.autoRunTimer = null;
+    this.autoRunning = false;
   }
 
   init() {
     this.bindEvents();
     this.refreshRegisters();
     this.refreshOutput();
+    this.startAutoRun();
   }
 
   bindEvents() {
@@ -40,10 +43,10 @@ class FactoryUI {
             this.queueCommand("/reset");
             break;
           case "step":
-            this.queueTrace(1);
+            this.clearHaltAndTrace(1);
             break;
           case "run":
-            this.queueTrace(this.readCycleBudget());
+            this.clearHaltAndTrace(this.readCycleBudget());
             break;
           case "halt":
             this.queueCommand("/halt");
@@ -59,6 +62,15 @@ class FactoryUI {
         }
       });
     });
+  }
+
+  async clearHaltAndTrace(cycles) {
+    try {
+      await fetch("/continue", { method: "POST" });
+    } catch (error) {
+      console.warn("Continue failed", error);
+    }
+    await this.queueTrace(cycles);
   }
 
   async queueTrace(cycles) {
@@ -248,6 +260,44 @@ class FactoryUI {
     }
     container.textContent = message;
     container.dataset.tone = tone;
+  }
+
+  startAutoRun() {
+    if (this.autoRunTimer) {
+      clearInterval(this.autoRunTimer);
+    }
+    this.autoRunning = true;
+    this.autoRunTimer = setInterval(() => this.autoRunTick(), 100);
+  }
+
+  stopAutoRun() {
+    if (this.autoRunTimer) {
+      clearInterval(this.autoRunTimer);
+      this.autoRunTimer = null;
+    }
+    this.autoRunning = false;
+  }
+
+  async autoRunTick() {
+    if (!this.autoRunning) {
+      return;
+    }
+    try {
+      const response = await fetch("/regs");
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      this.updateRegisters(data);
+
+      if (!data.halted) {
+        await this.queueTrace(1);
+      }
+
+      this.refreshOutput();
+    } catch (error) {
+      console.warn("Auto-run tick failed", error);
+    }
   }
 }
 
