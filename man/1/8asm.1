@@ -1,0 +1,93 @@
+.TH 8ASM 1 "October 2025" "waffle8" "PDP-8 Development Tools"
+.SH NAME
+8asm \- assemble PDP-8 source into Motorola S-records
+.SH SYNOPSIS
+.B 8asm.py
+.RI [ source ]
+.RI [ output ]
+.RI [ options ]
+.SH DESCRIPTION
+.B 8asm.py
+is a convenience front-end assembler for PDP-8 source code. It processes
+assembly language files and produces Motorola S-record formatted output
+suitable for loading into a PDP-8 emulator or hardware device.
+.PP
+The assembler performs a two-pass assembly process to resolve symbols and
+generate machine code. Output can be directed to stdout or written to a file.
+.SH OPTIONS
+.TP
+.B \-\-list
+Print an assembly listing showing source lines, addresses, and generated code
+before the S-record output.
+.TP
+.B \-h, \-\-help
+Display usage information and exit.
+.SH ARGUMENTS
+.TP
+.I source
+Input assembly source file. Use "\-" to read from standard input.
+.TP
+.I output
+Optional output file for S-records. If omitted, output is written to stdout.
+.SH USAGE EXAMPLES
+.TP
+Assemble and print S-records to stdout:
+.B 8asm.py demo.asm
+.TP
+Assemble with listing output:
+.B 8asm.py \-\-list demo.asm
+.TP
+Assemble and write to file:
+.B 8asm.py demo.asm demo.srec
+.TP
+Read from stdin, write to file:
+.B cat source.asm | 8asm.py \- output.srec
+.SH OUTPUT FORMAT
+The assembler produces Motorola S-record format output, which consists of
+ASCII text records encoding memory addresses and data. The start address
+is determined by the START symbol if defined, otherwise the lowest
+address in the assembled program is used.
+.SH EXIT STATUS
+.TP
+.B 0
+Assembly completed successfully.
+.TP
+.B 1
+Assembly failed due to syntax errors, I/O errors, or empty output.
+.SH ASSEMBLY LANGUAGE
+PDP-8 assembly source files use the following conventions:
+.IP \(bu 2
+Comments begin with "/" and continue to end of line
+.IP \(bu 2
+Labels end with comma (e.g., LOOP,)
+.IP \(bu 2
+Numeric constants are octal by default
+.IP \(bu 2
+Origin directive "*" sets assembly address (e.g., *4000)
+.IP \(bu 2
+Indirect addressing uses "I" (e.g., DCA I PTR)
+.SH DIAGNOSTICS
+Error messages are written to standard error and include:
+.IP \(bu 2
+Source file read errors
+.IP \(bu 2
+Assembly syntax errors with line numbers
+.IP \(bu 2
+Undefined symbol references
+.IP \(bu 2
+Output file write errors
+.SH FILES
+.TP
+.I *.asm
+PDP-8 assembly source files
+.TP
+.I *.srec
+Motorola S-record output files
+.SH SEE ALSO
+.BR pdp8_asm.py (the underlying assembler module)
+.SH NOTES
+The assembler is implemented in Python 3 and requires the pdp8_asm module
+from the tools directory to be in the module search path.
+.PP
+When using \-\-list, the listing is printed even if assembly errors occur,
+allowing you to see where the errors are in context.

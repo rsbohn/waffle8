@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-PDP-8 ASCII Papertape Reader
+PDP-8 Papertape Reader
 
-Reads and displays the contents of ASCII papertape files in human-readable format.
-The tool can decode 6-bit ASCII papertape data back to readable text.
+Reads and displays the contents of PDP-8 papertape files in human-readable format.
+Supports both SIXBIT (binary) and ASCII (octal) tape formats with auto-detection.
 """
 
 import sys
@@ -55,24 +55,70 @@ def six_bit_to_ascii(bit_string):
     except ValueError:
         return '?'  # Invalid binary string
 
-def parse_tape_line(line):
-    """Parse a single tape line and extract bit sequences."""
-    # Remove tape identifier (e.g., "TP001:", "LRM001:")
+def detect_tape_format(line):
+    """Detect whether tape is SIXBIT (binary) or ASCII (octal) format."""
+    if ':' not in line:
+        return None
+    
+    _, data_part = line.split(':', 1)
+    chunks = data_part.strip().split()
+    
+    if not chunks:
+        return None
+    
+    # Check first chunk to determine format
+    first_chunk = chunks[0]
+    
+    # SIXBIT: 6 characters of 0/1
+    if len(first_chunk) == 6 and all(c in '01' for c in first_chunk):
+        return 'sixbit'
+    
+    # ASCII: 3 digits (octal 000-377)
+    if len(first_chunk) == 3 and first_chunk.isdigit():
+        return 'ascii'
+    
+    return None
+
+def parse_tape_line(line, format_type='sixbit'):
+    """Parse a single tape line and extract characters.
+    
+    Args:
+        line: The tape line to parse
+        format_type: Either 'sixbit' (binary) or 'ascii' (octal)
+    
+    Returns:
+        List of decoded characters
+    """
+    # Remove tape identifier (2-3 char label + 3-digit octal block, e.g., "TP001:", "MAN001:")
     if ':' in line:
         _, data_part = line.split(':', 1)
     else:
         data_part = line
     
-    # Split into 6-bit chunks
-    bit_chunks = data_part.strip().split()
+    chunks = data_part.strip().split()
+    decoded_chars = []
     
-    # Filter out empty chunks and ensure they're 6 bits
-    valid_chunks = [chunk for chunk in bit_chunks if len(chunk) == 6 and all(c in '01' for c in chunk)]
+    if format_type == 'sixbit':
+        # SIXBIT format: 6-bit binary strings
+        for chunk in chunks:
+            if len(chunk) == 6 and all(c in '01' for c in chunk):
+                decoded_chars.append(six_bit_to_ascii(chunk))
     
-    return valid_chunks
+    elif format_type == 'ascii':
+        # ASCII format: 3-digit octal values
+        for chunk in chunks:
+            if len(chunk) == 3 and chunk.isdigit():
+                try:
+                    char_code = int(chunk, 8)
+                    if 0 <= char_code <= 127:
+                        decoded_chars.append(chr(char_code))
+                except ValueError:
+                    pass
+    
+    return decoded_chars
 
 def read_tape_file(filename, records_only=False):
-    """Read and decode an ASCII papertape file."""
+    """Read and decode a papertape file (SIXBIT or ASCII format)."""
     if not os.path.exists(filename):
         print(f"Error: File '{filename}' not found.")
         return None
@@ -84,6 +130,21 @@ def read_tape_file(filename, records_only=False):
         print(f"Error reading file '{filename}': {e}")
         return None
     
+    # Auto-detect format from first valid line
+    format_type = None
+    for line in lines:
+        line = line.strip()
+        if line and ':' in line:
+            format_type = detect_tape_format(line)
+            if format_type:
+                break
+    
+    if not format_type:
+        print(f"Error: Could not detect tape format (expected SIXBIT or ASCII)")
+        return None
+    
+    format_name = "SIXBIT (binary)" if format_type == 'sixbit' else "ASCII (octal)"
+    
     if records_only:
         # For records-only mode, return list of (label, content) tuples
         records = []
@@ -94,24 +155,21 @@ def read_tape_file(filename, records_only=False):
                 
             # Parse tape line to extract label and decode content
             if ':' in line:
-                label_part, data_part = line.split(':', 1)
-                bit_chunks = parse_tape_line(line)
+                label_part, _ = line.split(':', 1)
+                decoded_chars = parse_tape_line(line, format_type)
                 
-                if bit_chunks:
-                    # Convert bit chunks to characters
-                    line_text = ""
-                    for chunk in bit_chunks:
-                        char = six_bit_to_ascii(chunk)
-                        line_text += char
+                if decoded_chars:
+                    line_text = ''.join(decoded_chars)
                     records.append((label_part.strip(), line_text))
         return records
     
     decoded_text = ""
-    total_bits = 0
+    total_chunks = 0
     line_count = 0
     
     if not records_only:
         print(f"Reading tape file: {filename}")
+        print(f"Format: {format_name}")
         print("=" * 60)
     
     for line_num, line in enumerate(lines, 1):
@@ -120,24 +178,22 @@ def read_tape_file(filename, records_only=False):
             continue
             
         line_count += 1
-        bit_chunks = parse_tape_line(line)
+        decoded_chars = parse_tape_line(line, format_type)
         
-        if not bit_chunks:
+        if not decoded_chars:
             continue
             
-        total_bits += len(bit_chunks)
+        total_chunks += len(decoded_chars)
         
-        # Convert bit chunks to characters
-        line_text = ""
-        for chunk in bit_chunks:
-            char = six_bit_to_ascii(chunk)
-            line_text += char
+        # Append decoded characters
+        for char in decoded_chars:
             decoded_text += char
     
     if not records_only:
         print(f"Tape statistics:")
         print(f"  Lines processed: {line_count}")
-        print(f"  Total 6-bit chunks: {total_bits}")
+        chunk_label = "6-bit chunks" if format_type == 'sixbit' else "ASCII characters"
+        print(f"  Total {chunk_label}: {total_chunks}")
         print(f"  Decoded characters: {len(decoded_text)}")
         print()
     
@@ -179,10 +235,11 @@ def display_tape_content(content, show_raw=False, show_hex=False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Read and display PDP-8 ASCII papertape files",
+        description="Read and display PDP-8 papertape files (SIXBIT or ASCII format)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   %(prog)s tapes/lorem.tape
+  %(prog)s tapes/8asm-man.tape
   %(prog)s tapes/tp_demo.tape --raw
   %(prog)s tapes/lorem.tape --hex --raw
   %(prog)s tapes/lorem.tape --records
@@ -190,7 +247,7 @@ def main():
     )
     
     parser.add_argument('tape_file', 
-                       help='Path to the ASCII papertape file to read')
+                       help='Path to the papertape file to read (SIXBIT or ASCII format)')
     parser.add_argument('--raw', action='store_true',
                        help='Show raw character codes')
     parser.add_argument('--hex', action='store_true',
