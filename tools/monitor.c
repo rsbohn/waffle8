@@ -207,6 +207,8 @@ struct monitor_runtime {
     pdp8_magtape_device_t *magtape;
     struct monitor_config config;
     bool config_loaded;
+    /* Optional command-line override for the paper tape image path. */
+    const char *paper_tape_image_override;
     size_t memory_words;
 };
 
@@ -784,6 +786,7 @@ static void monitor_runtime_init(struct monitor_runtime *runtime) {
     memset(runtime, 0, sizeof(*runtime));
     monitor_config_init(&runtime->config);
     runtime->config_loaded = false;
+    runtime->paper_tape_image_override = NULL;
 }
 
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
@@ -1445,14 +1448,20 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
     pdp8_line_printer_set_column_limit(runtime->printer, (uint16_t)printer_columns);
 
     if (runtime->config_loaded && runtime->config.paper_tape_present) {
-        if (runtime->config.paper_tape_image && *runtime->config.paper_tape_image) {
+        const char *image_path = NULL;
+        if (runtime->paper_tape_image_override && *runtime->paper_tape_image_override) {
+            image_path = runtime->paper_tape_image_override;
+        } else if (runtime->config.paper_tape_image && *runtime->config.paper_tape_image) {
+            image_path = runtime->config.paper_tape_image;
+        }
+
+        if (image_path) {
             runtime->paper_tape = pdp8_paper_tape_device_create();
             if (!runtime->paper_tape) {
                 monitor_console_puts("Warning: unable to create paper tape device.");
-            } else if (pdp8_paper_tape_device_load(runtime->paper_tape,
-                                                   runtime->config.paper_tape_image) != 0) {
+            } else if (pdp8_paper_tape_device_load(runtime->paper_tape, image_path) != 0) {
                 monitor_console_printf("Warning: unable to load paper tape image '%s'.\n",
-                                       runtime->config.paper_tape_image);
+                                       image_path);
                 pdp8_paper_tape_device_destroy(runtime->paper_tape);
                 runtime->paper_tape = NULL;
             } else if (pdp8_paper_tape_device_attach(runtime->cpu, runtime->paper_tape) != 0) {
@@ -1462,7 +1471,7 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
             }
         } else {
             monitor_console_puts(
-                "Warning: paper_tape device requested but no image path provided in pdp8.config.");
+                "Warning: paper_tape device requested but no image path provided in pdp8.config or command line.");
         }
     }
 
@@ -1604,12 +1613,28 @@ int main(int argc, char **argv) {
     monitor_runtime_init(&runtime);
 
     const char *startup_image = NULL;
-    if (argc > 2) {
-        fprintf(stderr, "Usage: %s [image.srec]\n", argv[0]);
-        return EXIT_FAILURE;
-    }
-    if (argc == 2) {
-        startup_image = argv[1];
+    const char *papertape_override = NULL;
+
+    /* Simple argument parsing: allow optional --papertape <path> and an
+       optional positional SREC image. Examples:
+         monitor --papertape tapes/8asm-man.tape
+         monitor image.srec
+         monitor --papertape tape.tap image.srec
+    */
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--papertape") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --papertape requires a path argument.\n");
+                return EXIT_FAILURE;
+            }
+            papertape_override = argv[i + 1];
+            i++; /* skip value */
+        } else if (!startup_image) {
+            startup_image = argv[i];
+        } else {
+            fprintf(stderr, "Usage: %s [--papertape <path>] [image.srec]\n", argv[0]);
+            return EXIT_FAILURE;
+        }
     }
 
     const pdp8_board_spec *board = NULL;
@@ -1623,6 +1648,8 @@ int main(int argc, char **argv) {
     }
 
     runtime.config_loaded = config_loaded;
+    /* Apply any command-line override to the runtime so device init can use it. */
+    runtime.paper_tape_image_override = papertape_override;
 
     if (config_status < 0) {
         fprintf(stderr,

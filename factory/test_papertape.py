@@ -106,6 +106,9 @@ def configure_signatures(lib: ctypes.CDLL) -> None:
     lib.pdp8_api_get_ac.argtypes = [ctypes.c_void_p]
     lib.pdp8_api_get_ac.restype = ctypes.c_uint16
 
+    lib.pdp8_api_get_pc.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_get_pc.restype = ctypes.c_uint16
+
     lib.pdp8_paper_tape_device_create.restype = ctypes.c_void_p
     lib.pdp8_paper_tape_device_destroy.argtypes = [ctypes.c_void_p]
     lib.pdp8_paper_tape_device_destroy.restype = None
@@ -130,15 +133,13 @@ def test_skip_ready(lib: ctypes.CDLL, cpu: int, device: int) -> bool:
     lib.pdp8_api_set_pc(cpu, 0o200)
     lib.pdp8_api_clear_halt(cpu)
     
-    # Step through the skip instruction
+    # Execute the SKIP instruction and then read PC to see if it skipped
     if lib.pdp8_api_step(cpu) == 0:
         raise RuntimeError("Failed to execute SKIP instruction")
-    
-    # Check if PC advanced (skip occurred) or stayed at 201 (no skip)
-    # Note: We can't directly read PC, so we step once more and check if we hit the first or second HLT
-    pc_after_skip = 0o201 if lib.pdp8_api_step(cpu) == 0 else 0o202
-    
-    return pc_after_skip == 0o202  # True if skip occurred (ready)
+
+    pc = lib.pdp8_api_get_pc(cpu)
+    # If skip occurred PC will have advanced past the first HLT (0o201 -> 0o202)
+    return (pc & 0o7777) == 0o202
 
 
 def test_select_block(lib: ctypes.CDLL, cpu: int, device: int, block_num: int) -> None:
@@ -307,7 +308,7 @@ def main() -> int:
                         # Check if device is ready after selection
                         if test_skip_ready(lib, cpu, device):
                             # Try to read a few words to see content
-                            words = test_read_words(lib, cpu, device, 4)
+                            words = test_read_words(lib, cpu, device, 16)
                             if words:
                                 # Check if words have meaningful content (not all zeros)
                                 non_zero_words = [w for w in words if w != 0]
@@ -321,7 +322,7 @@ def main() -> int:
             else:
                 print(f"Found {len(found_blocks)} blocks with content:")
                 for block_num, words in found_blocks:
-                    word_preview = " ".join(f"{w:04o}" for w in words[:4])
+                    word_preview = " ".join(f"{w:04o}" for w in words[:64])
                     print(f"  Block {block_num:04o}: {word_preview}...")
             return 0
             

@@ -4,6 +4,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <stdbool.h>
+
+/* Helper to report parsing errors with line numbers. */
+static void paper_tape_report_error(size_t line_number, const char *fmt, ...) {
+    va_list ap;
+    fprintf(stderr, "paper_tape_load: line %zu: ", line_number);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "\n");
+}
 
 static int ensure_block_capacity(pdp8_paper_tape *image, size_t desired_count) {
     if (desired_count <= image->block_capacity) {
@@ -43,6 +56,7 @@ static int parse_bits(const char *text, uint16_t **out_words, size_t *out_word_c
         }
         if (*p != '0' && *p != '1') {
             free(bits);
+            /* invalid character in bit string */
             return -1;
         }
         if (bit_count == bit_capacity) {
@@ -60,6 +74,7 @@ static int parse_bits(const char *text, uint16_t **out_words, size_t *out_word_c
 
     if (bit_count == 0 || (bit_count % 12u) != 0u) {
         free(bits);
+        /* empty or not a multiple of 12 bits */
         return -1;
     }
 
@@ -88,6 +103,34 @@ static int parse_bits(const char *text, uint16_t **out_words, size_t *out_word_c
     return 0;
 }
 
+/* Diagnose why a bit-text failed to parse and report a helpful message. */
+static void analyze_bit_text(size_t line_number, const char *text) {
+    size_t bit_count = 0;
+    for (const char *p = text; *p != '\0'; ++p) {
+        if (isspace((unsigned char)*p)) continue;
+        if (*p == '#') break;
+        if (*p != '0' && *p != '1') {
+            paper_tape_report_error(line_number, "bit string contains non-binary character '%c'", *p);
+            return;
+        }
+        ++bit_count;
+    }
+    if (bit_count == 0) {
+        paper_tape_report_error(line_number, "bit string is empty");
+        return;
+    }
+    if ((bit_count % 12u) != 0u) {
+        paper_tape_report_error(line_number, "bit string length %zu is not a multiple of 12", bit_count);
+        return;
+    }
+    size_t word_count = bit_count / 12u;
+    if (word_count > PDP8_PAPER_TAPE_MAX_WORDS) {
+        paper_tape_report_error(line_number, "bit string contains %zu words, exceeds max %u", word_count,
+                                (unsigned)PDP8_PAPER_TAPE_MAX_WORDS);
+        return;
+    }
+}
+
 int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
     if (!path || !out_image) {
         return -1;
@@ -108,6 +151,11 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
 
     char line[1024];
     size_t line_number = 0;
+    /* Track parser used for each parsed block for a brief summary. */
+    enum parser_type { PARSER_BITS = 0, PARSER_ASCII_OCTAL = 1 };
+    size_t parser_used_capacity = 0;
+    size_t parser_used_count = 0;
+    int *parser_used = NULL; /* parallel array to image->blocks for quick reporting */
     while (fgets(line, sizeof(line), fp) != NULL) {
         ++line_number;
 
@@ -120,6 +168,7 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
         }
 
         if (!isupper((unsigned char)cursor[0]) || !isupper((unsigned char)cursor[1])) {
+            paper_tape_report_error(line_number, "expected two-letter label at start of line");
             pdp8_paper_tape_destroy(image);
             fclose(fp);
             return -1;
@@ -136,6 +185,7 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
         size_t block_len = 0;
         while (*cursor != '\0' && *cursor != ':' && !isspace((unsigned char)*cursor)) {
             if (*cursor < '0' || *cursor > '7' || block_len >= 3) {
+                paper_tape_report_error(line_number, "malformed block number");
                 pdp8_paper_tape_destroy(image);
                 fclose(fp);
                 return -1;
@@ -148,6 +198,7 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
         }
 
         if (*cursor != ':' || block_len != 3) {
+            paper_tape_report_error(line_number, "expected ':' after three-octal block number");
             pdp8_paper_tape_destroy(image);
             fclose(fp);
             return -1;
@@ -164,12 +215,93 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             *newline = '\0';
         }
 
-        uint16_t *words = NULL;
+    uint16_t *words = NULL;
         size_t word_count = 0;
-        if (parse_bits(bit_text, &words, &word_count) != 0) {
-            pdp8_paper_tape_destroy(image);
-            fclose(fp);
-            return -1;
+    int this_parser = -1;
+    if (parse_bits(bit_text, &words, &word_count) != 0) {
+            /* If parse_bits fails, try ASCII-octal token format (one ASCII byte per token). */
+            /* Attempt to parse tokens like 070 101 123 or 012 for newline, octal 000-377. */
+            const char *p = bit_text;
+            bool any_octal = false;
+            /* Count tokens first */
+            size_t token_count = 0;
+            while (*p) {
+                while (isspace((unsigned char)*p)) ++p;
+                if (*p == '\0' || *p == '#') break;
+                char tok[4] = {0};
+                size_t ti = 0;
+                while (*p && !isspace((unsigned char)*p) && *p != '#') {
+                    if (ti < 3) tok[ti++] = *p;
+                    ++p;
+                }
+                if (ti == 0) break;
+                /* ensure all chars are octal digits */
+                bool ok = true;
+                for (size_t i = 0; i < ti; ++i) {
+                    if (tok[i] < '0' || tok[i] > '7') { ok = false; break; }
+                }
+                if (!ok) {
+                    any_octal = false;
+                    break;
+                }
+                any_octal = true;
+                ++token_count;
+            }
+
+            if (any_octal && token_count > 0) {
+                /* allocate words and parse tokens into 12-bit words (zero-extended 8-bit ASCII)
+                   each token is octal, range 000-377 (0-255 decimal) */
+                if (token_count > PDP8_PAPER_TAPE_MAX_HALFWORDS) {
+                    paper_tape_report_error(line_number, "ASCII-octal block contains %zu words, exceeds max %u",
+                                            token_count, (unsigned)PDP8_PAPER_TAPE_MAX_HALFWORDS);
+                    pdp8_paper_tape_destroy(image);
+                    fclose(fp);
+                    return -1;
+                }
+                words = (uint16_t *)calloc(token_count, sizeof(uint16_t));
+                if (!words) {
+                    pdp8_paper_tape_destroy(image);
+                    fclose(fp);
+                    return -1;
+                }
+
+                /* parse again to fill words */
+                p = bit_text;
+                size_t wi = 0;
+                while (*p) {
+                    while (isspace((unsigned char)*p)) ++p;
+                    if (*p == '\0' || *p == '#') break;
+                    char tok[4] = {0};
+                    size_t ti = 0;
+                    while (*p && !isspace((unsigned char)*p) && *p != '#') {
+                        if (ti < 3) tok[ti++] = *p;
+                        ++p;
+                    }
+                    if (ti == 0) break;
+                    char *endptr = NULL;
+                    long val = strtol(tok, &endptr, 8);
+                    if (!endptr || *endptr != '\0' || val < 0 || val > 0xFF) {
+                        free(words);
+                        paper_tape_report_error(line_number, "invalid ASCII-octal token '%s'", tok);
+                        pdp8_paper_tape_destroy(image);
+                        fclose(fp);
+                        return -1;
+                    }
+                    words[wi++] = (uint16_t)(val & 0xFF);
+                }
+                word_count = wi;
+                this_parser = PARSER_ASCII_OCTAL;
+            } else {
+                /* not an ASCII-octal line either */
+                analyze_bit_text(line_number, bit_text);
+                paper_tape_report_error(line_number, "failed to parse bit string for block %s", block_text);
+                pdp8_paper_tape_destroy(image);
+                fclose(fp);
+                free(parser_used);
+                return -1;
+            }
+        } else {
+            this_parser = PARSER_BITS;
         }
 
         if (image->label[0] == '\0') {
@@ -184,6 +316,7 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
         uint16_t block_value = (uint16_t)strtoul(block_text, NULL, 8);
         for (size_t i = 0; i < image->block_count; ++i) {
             if (image->blocks[i].block == block_value) {
+                paper_tape_report_error(line_number, "duplicate block number %s", block_text);
                 free(words);
                 pdp8_paper_tape_destroy(image);
                 fclose(fp);
@@ -195,6 +328,7 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             free(words);
             pdp8_paper_tape_destroy(image);
             fclose(fp);
+            free(parser_used);
             return -1;
         }
 
@@ -203,13 +337,56 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
         block->word_count = word_count;
         block->words = words;
         image->block_count += 1;
+        /* record parser used for this block */
+        if (parser_used_count + 1 > parser_used_capacity) {
+            size_t newcap = parser_used_capacity ? parser_used_capacity * 2 : 8;
+            int *next = (int *)realloc(parser_used, newcap * sizeof(int));
+            if (!next) {
+                free(parser_used);
+                paper_tape_report_error(line_number, "out of memory recording parser usage");
+                pdp8_paper_tape_destroy(image);
+                fclose(fp);
+                return -1;
+            }
+            parser_used = next;
+            parser_used_capacity = newcap;
+        }
+        parser_used[parser_used_count++] = this_parser;
     }
 
     fclose(fp);
     if (image->block_count == 0) {
         pdp8_paper_tape_destroy(image);
+        free(parser_used);
         return -1;
     }
+
+    /* Print a concise summary: loaded N blocks from the given file and which parser(s) were used. */
+    const char *parser_name = "unknown";
+    if (parser_used_count == 0) {
+        parser_name = "none";
+    } else {
+        int first = parser_used[0];
+        bool same = true;
+        for (size_t i = 1; i < parser_used_count; ++i) {
+            if (parser_used[i] != first) {
+                same = false;
+                break;
+            }
+        }
+        if (same) {
+            parser_name = (first == PARSER_BITS) ? "bits" : "ascii-octal";
+        } else {
+            parser_name = "mixed";
+        }
+    }
+    fprintf(stderr,
+            "paper_tape_load: Loaded %zu blocks from %s parser=%s label=%s\n",
+            image->block_count,
+            path ? path : "(unknown)",
+            parser_name,
+            image->label);
+    free(parser_used);
 
     *out_image = image;
     return 0;

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List
 
 
-def text_to_ascii_tape(text: str, tape_id: str = "MAN") -> str:
+def text_to_ascii_tape(text: str, tape_id: str = "MA") -> str:
     """Convert text to ASCII papertape format with octal encoding."""
     lines = text.split('\n')
     tape_lines: List[str] = []
@@ -39,19 +39,19 @@ def text_to_ascii_tape(text: str, tape_id: str = "MAN") -> str:
 def main():
     if len(sys.argv) < 2:
         print("Usage: man_to_tape.py <input_text_file> [output_tape_file] [tape_id]")
-        print("Example: man_to_tape.py 8asm-man.txt tapes/8asm-man.tape MAN")
+        print("Example: man_to_tape.py 8asm-man.txt tapes/8asm-man.tape MA")
         return 1
     
     input_file = Path(sys.argv[1])
     output_file = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(f"tapes/{input_file.stem}.tape")
-    tape_id = sys.argv[3] if len(sys.argv) > 3 else "MAN"
+    tape_id = sys.argv[3] if len(sys.argv) > 3 else "MA"
     
     if not input_file.exists():
         print(f"Error: {input_file} not found")
         return 1
     
     text = input_file.read_text()
-    tape = text_to_ascii_tape(text, tape_id)
+    tape = text_to_ascii_tape(text, tape_id[:2])
     
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(tape + "\n")
