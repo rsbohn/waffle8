@@ -106,6 +106,10 @@ show magtape
 
 # Your PDP-8 program can now read from demo/ files
 # Files are presented as sequential records
+#
+# Sample reels included in this repository:
+#   magtape/demo-hello-ascii.tap   (ASCII header + ASCII payload)
+#   magtape/demo-hello-sixbit.tap  (SIXBIT header + SIXBIT payload)
 ```
 
 ### 2. Writing Output Files
@@ -130,6 +134,13 @@ magtape new 1
 - **Output files**: Created in `magtape/` with timestamped names
 - **Records**: Each file represents one tape record
 - **End conditions**: End-of-record when file ends, end-of-tape after last file
+
+### Included Demo Records
+
+| File                                 | Label   | Format | Payload summary        |
+|--------------------------------------|---------|--------|------------------------|
+| `magtape/demo-hello-ascii.tap`       | ASCII0  | ASCII  | “Hello from ASCII tape” |
+| `magtape/demo-hello-sixbit.tap`      | SIXBIT  | SIXBIT | “SIXBIT DEMO 01”       |
 
 ### Record Header Layout
 Every magtape record begins with a 6-word header encoded in SIXBIT:

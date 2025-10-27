@@ -67,7 +67,8 @@ START,  CLA CLL
 
         CLA CLL
         TAD HEADER_ADDR
-        DCA HDR_PTR             / HDR_PTR -> HEADER[0]
+        TAD NEG1
+        DCA HDR_PTR             / HDR_PTR -> HEADER[0]-1 for auto-increment
         CLA CLL
         TAD NEG6
         DCA WORDS_LEFT
@@ -145,7 +146,6 @@ DECODE_FORMAT,
         CLA
         TAD UNIT_NUM
         TAD DIGIT_BASE
-        DCA CHAR_TEMP
         JMS I PUTCHR_PTR
         JMS I PRINT_CRLF_PTR
 
@@ -457,7 +457,7 @@ FORMAT_BUF,
         0
         0
 
-        *0700
+        *0740               / Keep CHARMAP away from HEADER/LABEL buffers
 CHARMAP,
         0040
         0101
