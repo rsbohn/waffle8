@@ -5,11 +5,15 @@
         *0200                   / Program origin
 
 START,  CLA CLL                 / Clear AC and Link before entering loop
+        TAD WD_CTRL             / load watchdog control word into AC
+        IOT 06551              / IOT: watchdog WRITE (device 055 octal, write bit = 1)
+        CLA
 
 LOOP,
         CLA                     / Reset AC before loading string pointer
         TAD MESSAGE_PTR         / Load pointer to message
         JMS PUTS                / Print the message
+        IOT 06554              / IOT: watchdog RESTART (device 055 octal, restart bit = 4)
         JMP LOOP                / Repeat forever
 
 /------------------------------------------------------------
@@ -75,5 +79,7 @@ MESSAGE,
         "n";"o";" ";"p";"l";"a";"y";" ";"m";"a";"k";"e";" ";
         "J";"a";"c";"k";" ";"a";" ";"d";"u";"l";"l";" ";"b";"o";"y";".";
         0015;0012;0000
+
+WD_CTRL, 03100                 / control: CMD=3 (HALT one-shot), COUNT=5 deciseconds
 
         $

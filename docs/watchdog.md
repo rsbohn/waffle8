@@ -46,6 +46,26 @@ Developer notes
 Testing
 - `factory/test_watchdog.py` contains ctypes-based tests that exercise write/read, one-shot HALT, and one-shot RESET behavior against `factory/libpdp8.so`.
 - `tests/test_config.c` verifies parsing of the `pdp8.config` watchdog stanza and includes tests for invalid configurations (missing stanza and out-of-range values).
+-
+Factory runner wiring
+- The Python `factory/driver.py` runner can create and attach the watchdog when a `device watchdog { ... }` stanza is present in `pdp8.config`.
+- The driver initializes the watchdog control register by issuing an `IOT` from Python: it sets AC, writes an IOT instruction into address 0 and executes a single step. This avoids adding a new C helper API.
+- The driver checks for the presence of `pdp8_watchdog_create` in the shared library and falls back gracefully if the device isn't available in an older build.
+
+Assembler notes and symbolic IOTs
+- The project's assembler supports labels and resolves symbols to addresses. It also accepts `IOT <octal>` syntax.
+- Important note: defining a symbol as a data word and then using `IOT SYMBOL` will assemble an IOT whose operand is the symbol's address (not the numeric octal constant). Example:
+  - `WD_WRITE, 06551` followed by `IOT WD_WRITE` results in an IOT coded with the address of `WD_WRITE`, not `06551`.
+- Recommended approaches:
+  - Use `IOT 06551` (explicit octal literal) when you mean the IOT opcode 06551.
+  - If you want a readable symbolic name that does not allocate memory, we can add an `EQU` directive to the assembler so symbols can represent numeric constants without occupying a word. (Not yet implemented.)
+
+Demos and examples
+- `demo/hello-wd.asm` shows a minimal program that writes the watchdog control register and waits for HALT.
+- `demo/dull-boy.asm` demonstrates refreshing the watchdog from a long-running guest program. Lessons learned:
+  - Initialize the watchdog control register before entering long loops so `RESTART` IOTs refresh an armed timer.
+  - Refresh the watchdog frequently enough during long operations (for example, after each printed character) to avoid unintended expiry when delays exceed the watchdog period.
+  - Use `IOT <octal>` forms to clearly express IOT ops with octal constants; the assembler marks these as IOT entries.
 
 Next actions (optional)
 - Implement true interrupt delivery for the watchdog instead of mapping to RESET.
