@@ -11,10 +11,14 @@
 START,  CLA CLL                 / clear AC and link
         TAD WD_CTRL             / load watchdog control word into AC
         06551                  / IOT: watchdog WRITE (device 055 octal, write bit = 1)
+        CLA
 
         / busy loop - continue executing instructions until watchdog HALTs
 LOOP,   ISZ  TEMP               / increment TEMP to show activity
+        CLL
+        IAC
         JMP  LOOP
+        HLT
 
 WD_CTRL, 03005                 / control: CMD=3 (HALT one-shot), COUNT=5 deciseconds
 TEMP,    00000                 / activity counter

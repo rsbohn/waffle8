@@ -25,6 +25,13 @@ KL8E_BAUD = 110
 KL8E_BITS_PER_CHAR = 10
 KL8E_CHAR_PERIOD = KL8E_BITS_PER_CHAR / KL8E_BAUD if KL8E_BAUD > 0 else 0.0
 
+# Watchdog device constants (match src/emulator/watchdog.h)
+PDP8_WATCHDOG_DEVICE_CODE = 0o55
+PDP8_WATCHDOG_IOT_BASE = 0o6000 | ((PDP8_WATCHDOG_DEVICE_CODE & 0x3F) << 3)
+PDP8_WATCHDOG_BIT_WRITE = 0x1
+PDP8_WATCHDOG_BIT_READ = 0x2
+PDP8_WATCHDOG_BIT_RESTART = 0x4
+
 
 @dataclass
 class DeviceConfig:
@@ -38,6 +45,13 @@ class DeviceConfig:
 
     paper_tape_present: bool = False
     paper_tape_image: Optional[str] = None
+    # Watchdog device config
+    watchdog_present: bool = False
+    watchdog_enabled: bool = False
+    watchdog_mode: Optional[str] = None
+    watchdog_periodic: bool = False
+    watchdog_default_count: int = 0
+    watchdog_pause_on_halt: bool = False
 
 
 class EmulatorError(Exception):
@@ -188,6 +202,13 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
     lib.pdp8_api_is_halted.restype = ctypes.c_int
 
+    # low-level step and AC access useful for issuing IOTs from the driver
+    lib.pdp8_api_step.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_step.restype = ctypes.c_int
+
+    lib.pdp8_api_set_ac.argtypes = [ctypes.c_void_p, ctypes.c_uint16]
+    lib.pdp8_api_set_ac.restype = None
+
     lib.pdp8_api_run.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
     lib.pdp8_api_run.restype = ctypes.c_int
 
@@ -245,11 +266,40 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_paper_tape_device_label.argtypes = [ctypes.c_void_p]
     lib.pdp8_paper_tape_device_label.restype = ctypes.c_char_p
 
+    # Watchdog API (optional; may not be present in older builds)
+    try:
+        lib.pdp8_watchdog_create.argtypes = []
+        lib.pdp8_watchdog_create.restype = ctypes.c_void_p
+
+        lib.pdp8_watchdog_destroy.argtypes = [ctypes.c_void_p]
+        lib.pdp8_watchdog_destroy.restype = None
+
+        lib.pdp8_watchdog_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        lib.pdp8_watchdog_attach.restype = ctypes.c_int
+    except AttributeError:
+        # older builds may not export these symbols; caller should handle gracefully
+        pass
+
 
 def write_word(lib: ctypes.CDLL, cpu: int, address: int, value: int) -> None:
     result = lib.pdp8_api_write_mem(cpu, ctypes.c_uint16(address), ctypes.c_uint16(value & 0x0FFF))
     if result != 0:
         raise EmulatorError(f"Failed to write memory at {address:04o}")
+
+
+def execute_iot(lib: ctypes.CDLL, cpu: int, instruction: int, ac: int | None = None) -> int:
+    """Write an IOT instruction into address 0 and execute a single step.
+    Returns resulting AC value (12-bit).
+    """
+    if ac is not None:
+        lib.pdp8_api_set_ac(cpu, ctypes.c_uint16(ac & 0x0FFF))
+    # write instruction at address 0 and set PC to 0, then step
+    if lib.pdp8_api_write_mem(cpu, ctypes.c_uint16(0), ctypes.c_uint16(instruction & 0x0FFF)) != 0:
+        raise EmulatorError("Failed to write IOT instruction to memory.")
+    lib.pdp8_api_set_pc(cpu, ctypes.c_uint16(0))
+    if lib.pdp8_api_step(cpu) == 0:
+        raise EmulatorError("Failed to execute IOT instruction.")
+    return lib.pdp8_api_get_ac(cpu) & 0x0FFF
 
 
 def load_rom_into_memory(lib: ctypes.CDLL, cpu: int, rom_words: List[Tuple[int, int]]) -> Tuple[int, int]:
@@ -393,6 +443,8 @@ def load_device_config(path: Path) -> Tuple[DeviceConfig, bool]:
             current = name
             if current == "paper_tape":
                 config.paper_tape_present = True
+            elif current == "watchdog":
+                config.watchdog_present = True
             elif current == "kl8e_console":
                 config.kl8e_present = True
             elif current == "line_printer":
@@ -428,6 +480,25 @@ def load_device_config(path: Path) -> Tuple[DeviceConfig, bool]:
         elif current == "paper_tape":
             if key == "image":
                 config.paper_tape_image = value
+        elif current == "watchdog":
+            if key == "enabled":
+                val = value.lower()
+                config.watchdog_enabled = val in ("1", "true", "yes", "on")
+            elif key == "mode":
+                config.watchdog_mode = value.strip('"')
+            elif key == "periodic":
+                val = value.lower()
+                config.watchdog_periodic = val in ("1", "true", "yes", "on")
+            elif key == "default_count":
+                try:
+                    count = int(value, 10)
+                    if 0 <= count <= 0x1FF:
+                        config.watchdog_default_count = count
+                except ValueError:
+                    pass
+            elif key == "pause_on_halt":
+                val = value.lower()
+                config.watchdog_pause_on_halt = val in ("1", "true", "yes", "on")
 
     return config, True
 
@@ -447,6 +518,7 @@ def main() -> int:
     printer = None
     console = None
     paper_tape_device = None
+    wd = None
     stdin_fd = -1
 
     try:
@@ -508,6 +580,30 @@ def main() -> int:
         elif config.paper_tape_present:
             print("Warning: paper_tape device configured without an image path.", file=sys.stderr)
 
+        # If the watchdog is configured for the factory driver, create and attach it
+        wd = None
+        if config.watchdog_present and config.watchdog_enabled and hasattr(lib, "pdp8_watchdog_create"):
+            try:
+                wd = lib.pdp8_watchdog_create()
+                if not wd:
+                    print("Warning: failed to create watchdog device.", file=sys.stderr)
+                    wd = None
+                else:
+                    if lib.pdp8_watchdog_attach(cpu, wd) != 0:
+                        print("Warning: failed to attach watchdog device.", file=sys.stderr)
+                        lib.pdp8_watchdog_destroy(wd)
+                        wd = None
+                    else:
+                        # Initialize the watchdog control register via IOT if a default count was provided
+                        if config.watchdog_default_count > 0:
+                            # default to HALT mode if mode string suggests halt, otherwise RESET
+                            mode = (config.watchdog_mode or "").lower()
+                            cmd = 3 if "halt" in mode else 1
+                            control = ((cmd & 0x7) << 9) | (config.watchdog_default_count & 0x1FF)
+                            execute_iot(lib, cpu, PDP8_WATCHDOG_IOT_BASE | PDP8_WATCHDOG_BIT_WRITE, ac=control)
+            except Exception as exc:
+                print(f"Warning: watchdog setup failed: {exc}", file=sys.stderr)
+
         lib.pdp8_api_reset(cpu)
 
         start_address, end_address = load_rom_into_memory(lib, cpu, rom_words)
@@ -559,6 +655,12 @@ def main() -> int:
             lib.pdp8_line_printer_destroy(printer)
         if paper_tape_device:
             lib.pdp8_paper_tape_device_destroy(paper_tape_device)
+        if wd:
+            try:
+                if hasattr(lib, "pdp8_watchdog_destroy"):
+                    lib.pdp8_watchdog_destroy(wd)
+            except Exception:
+                pass
         lib.pdp8_api_destroy(cpu)
 
     return 0
