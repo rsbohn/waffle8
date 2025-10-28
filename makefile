@@ -5,10 +5,11 @@ HOST_CFLAGS ?= -std=c11 -Wall -Wextra -pedantic
 MONITOR_OBJS = tools/monitor.c \
         src/monitor_config.c \
         src/monitor_platform_posix.c \
-        src/emulator/main.c \
+	src/emulator/main.c \
         src/emulator/board.c \
         src/emulator/kl8e_console.c \
         src/emulator/line_printer.c \
+	src/emulator/watchdog.c \
         src/emulator/paper_tape.c \
         src/emulator/paper_tape_device.c \
         src/emulator/magtape_device.c
@@ -18,6 +19,7 @@ PDP8_BENCH_OBJS = tools/pdp8_bench.c \
 	src/emulator/board.c \
 	src/emulator/kl8e_console.c \
 	src/emulator/line_printer.c \
+	src/emulator/watchdog.c \
 	src/emulator/paper_tape.c \
 	src/emulator/paper_tape_device.c \
 	src/emulator/magtape_device.c

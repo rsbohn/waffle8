@@ -242,6 +242,40 @@ static int monitor_config_load_file(const char *path, struct monitor_config *con
                 }
             }
         }
+        else if (strcmp(current_device, "watchdog") == 0) {
+            config->watchdog_present = true;
+            if (strcmp(key, "iot") == 0) {
+                if (monitor_config_set_string(&config->watchdog_iot, value) != 0) {
+                    fclose(fp);
+                    return -1;
+                }
+            } else if (strcmp(key, "enabled") == 0) {
+                bool flag = false;
+                if (parse_boolean(value, &flag)) {
+                    config->watchdog_enabled = flag;
+                }
+            } else if (strcmp(key, "mode") == 0) {
+                if (monitor_config_set_string(&config->watchdog_mode, value) != 0) {
+                    fclose(fp);
+                    return -1;
+                }
+            } else if (strcmp(key, "periodic") == 0) {
+                bool flag = false;
+                if (parse_boolean(value, &flag)) {
+                    config->watchdog_periodic = flag;
+                }
+            } else if (strcmp(key, "default_count") == 0) {
+                long parsed = strtol(value, NULL, 10);
+                if (parsed >= 0 && parsed <= INT32_MAX) {
+                    config->watchdog_default_count = (int)parsed;
+                }
+            } else if (strcmp(key, "pause_on_halt") == 0) {
+                bool flag = false;
+                if (parse_boolean(value, &flag)) {
+                    config->watchdog_pause_on_halt = flag;
+                }
+            }
+        }
     }
 
     fclose(fp);

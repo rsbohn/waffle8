@@ -29,6 +29,15 @@ struct monitor_config {
     char *paper_tape_iot;
     char *paper_tape_image;
 
+    /* Watchdog device configuration */
+    bool watchdog_present;
+    char *watchdog_iot;
+    bool watchdog_enabled;
+    char *watchdog_mode; /* "halt", "reset", "interrupt" */
+    bool watchdog_periodic;
+    int watchdog_default_count; /* deciseconds */
+    bool watchdog_pause_on_halt;
+
     size_t magtape_unit_count;
     struct monitor_magtape_unit_config magtape_units[MONITOR_MAX_MAGTAPE_UNITS];
 };

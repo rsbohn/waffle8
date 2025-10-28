@@ -11,6 +11,7 @@ extern "C" {
 typedef struct pdp8 pdp8_t;
 
 typedef void (*pdp8_iot_handler)(pdp8_t *cpu, uint16_t instruction, void *context);
+typedef void (*pdp8_tick_handler)(pdp8_t *cpu, void *context, uint64_t now_ns);
 
 pdp8_t *pdp8_api_create(size_t memory_size);
 void pdp8_api_destroy(pdp8_t *cpu);
@@ -29,6 +30,7 @@ int pdp8_api_write_mem(pdp8_t *cpu, uint16_t address, uint16_t value);
 uint16_t pdp8_api_read_mem(const pdp8_t *cpu, uint16_t address);
 int pdp8_api_load(pdp8_t *cpu, const uint16_t *words, size_t count, uint16_t start_address);
 int pdp8_api_register_iot(pdp8_t *cpu, uint8_t device_code, pdp8_iot_handler handler, void *context);
+int pdp8_api_register_tick(pdp8_t *cpu, uint8_t device_code, pdp8_tick_handler handler, void *context);
 void pdp8_api_request_skip(pdp8_t *cpu);
 void pdp8_api_set_switch_register(pdp8_t *cpu, uint16_t value);
 uint16_t pdp8_api_get_switch_register(const pdp8_t *cpu);

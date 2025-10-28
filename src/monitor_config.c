@@ -29,6 +29,8 @@ void monitor_config_clear(struct monitor_config *config) {
     free(config->line_printer_output);
     free(config->paper_tape_iot);
     free(config->paper_tape_image);
+    free(config->watchdog_iot);
+    free(config->watchdog_mode);
     monitor_config_init(config);
 }
 

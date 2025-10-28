@@ -21,6 +21,8 @@
 #include "../src/emulator/magtape_device.h"
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
+#include <strings.h>
+#include "../src/emulator/watchdog.h"
 
 typedef struct {
     uint32_t state[4];
@@ -205,6 +207,7 @@ struct monitor_runtime {
     pdp8_line_printer_t *printer;
     pdp8_paper_tape_device_t *paper_tape;
     pdp8_magtape_device_t *magtape;
+    pdp8_watchdog_t *watchdog;
     struct monitor_config config;
     bool config_loaded;
     /* Optional command-line override for the paper tape image path. */
@@ -1472,6 +1475,45 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         } else {
             monitor_console_puts(
                 "Warning: paper_tape device requested but no image path provided in pdp8.config or command line.");
+        }
+    }
+
+    /* Watchdog: create and attach if present in config */
+    if (runtime->config_loaded && runtime->config.watchdog_present && runtime->config.watchdog_enabled) {
+        runtime->watchdog = pdp8_watchdog_create();
+        if (!runtime->watchdog) {
+            monitor_console_puts("Warning: unable to create watchdog device.");
+        } else if (pdp8_watchdog_attach(runtime->cpu, runtime->watchdog) != 0) {
+            monitor_console_puts("Warning: unable to attach watchdog device IOT.");
+            pdp8_watchdog_destroy(runtime->watchdog);
+            runtime->watchdog = NULL;
+        } else {
+            /* Configure default mode/count by issuing a WRITE IOT if defaults provided */
+            int cmd = 0;
+            if (runtime->config.watchdog_mode) {
+                if (strcasecmp(runtime->config.watchdog_mode, "halt") == 0) {
+                    cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
+                } else if (strcasecmp(runtime->config.watchdog_mode, "reset") == 0) {
+                    cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
+                } else if (strcasecmp(runtime->config.watchdog_mode, "interrupt") == 0) {
+                    /* interrupt mode not yet implemented; fallback to reset */
+                    cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
+                }
+            } else {
+                /* default to halt */
+                cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
+            }
+            if (runtime->config.watchdog_periodic) {
+                if (cmd == PDP8_WD_CMD_HALT_ONE_SHOT) cmd = PDP8_WD_CMD_HALT_PERIODIC;
+                else if (cmd == PDP8_WD_CMD_RESET_ONE_SHOT) cmd = PDP8_WD_CMD_RESET_PERIODIC;
+            }
+            int count = runtime->config.watchdog_default_count > 0 ? runtime->config.watchdog_default_count : 0;
+            uint16_t control = (uint16_t)(((cmd & 0x7) << 9) | (count & 0x1FF));
+            /* write control register via IOT */
+            pdp8_api_set_ac(runtime->cpu, control);
+            pdp8_api_write_mem(runtime->cpu, 0u, PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_BIT_WRITE));
+            pdp8_api_set_pc(runtime->cpu, 0u);
+            pdp8_api_step(runtime->cpu);
         }
     }
 

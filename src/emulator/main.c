@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 #include "pdp8.h"
 #include "pdp8_board.h"
 
@@ -5,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define PDP8_WORD_MASK 0x0FFFu
 #define PDP8_LINK_MASK 0x01u
@@ -26,6 +28,8 @@ struct pdp8 {
     bool skip_pending;
     pdp8_iot_handler iot_handlers[64];
     void *iot_contexts[64];
+    pdp8_tick_handler tick_handlers[64];
+    void *tick_contexts[64];
     const pdp8_board_spec *board;
 };
 
@@ -328,6 +332,17 @@ int pdp8_api_step(pdp8_t *cpu) {
     }
 
     apply_skip(cpu);
+    /* call registered tick handlers with current monotonic time (ns) */
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+        for (uint8_t i = 0; i < 64u; ++i) {
+            pdp8_tick_handler th = cpu->tick_handlers[i];
+            if (th) {
+                th(cpu, cpu->tick_contexts[i], now_ns);
+            }
+        }
+    }
     return 1;
 }
 
@@ -430,6 +445,15 @@ int pdp8_api_register_iot(pdp8_t *cpu, uint8_t device_code, pdp8_iot_handler han
     }
     cpu->iot_handlers[device_code] = handler;
     cpu->iot_contexts[device_code] = context;
+    return 0;
+}
+
+int pdp8_api_register_tick(pdp8_t *cpu, uint8_t device_code, pdp8_tick_handler handler, void *context) {
+    if (!cpu || device_code >= 64u) {
+        return -1;
+    }
+    cpu->tick_handlers[device_code] = handler;
+    cpu->tick_contexts[device_code] = context;
     return 0;
 }
 
