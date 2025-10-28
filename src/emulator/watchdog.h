@@ -25,6 +25,17 @@ extern "C" {
 typedef struct pdp8_watchdog pdp8_watchdog_t;
 typedef struct pdp8 pdp8_t;
 
+struct pdp8_watchdog_status {
+	int enabled;           /* non-zero if counting */
+	int expired;           /* non-zero if last expiry fired */
+	int cmd;               /* raw command value (0..7) */
+	int configured_count;  /* countdown in deciseconds (0..511) */
+	int remaining_ds;      /* remaining time in deciseconds, -1 if not running */
+};
+
+/* Retrieve runtime status for a watchdog instance. Returns 0 on success. */
+int pdp8_watchdog_get_status(const pdp8_watchdog_t *wd, struct pdp8_watchdog_status *out_status);
+
 pdp8_watchdog_t *pdp8_watchdog_create(void);
 void pdp8_watchdog_destroy(pdp8_watchdog_t *wd);
 int pdp8_watchdog_attach(pdp8_t *cpu, pdp8_watchdog_t *wd);

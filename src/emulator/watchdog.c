@@ -140,3 +140,28 @@ int pdp8_watchdog_attach(pdp8_t *cpu, pdp8_watchdog_t *wd) {
     }
     return 0;
 }
+
+int pdp8_watchdog_get_status(const pdp8_watchdog_t *wd, struct pdp8_watchdog_status *out_status) {
+    if (!wd || !out_status) return -1;
+    memset(out_status, 0, sizeof(*out_status));
+    out_status->enabled = wd->enabled ? 1 : 0;
+    out_status->expired = wd->expired ? 1 : 0;
+    out_status->cmd = (int)(wd->cmd & 0x7u);
+    out_status->configured_count = (int)wd->configured_count;
+    if (!wd->enabled) {
+        out_status->remaining_ds = -1;
+        return 0;
+    }
+
+    uint64_t now = now_ns();
+    if (wd->expiry_ns <= now) {
+        out_status->remaining_ds = 0;
+        return 0;
+    }
+    uint64_t delta_ns = wd->expiry_ns - now;
+    /* convert ns to deciseconds (1 ds = 100ms = 100,000,000 ns) */
+    int remaining = (int)(delta_ns / 100000000ull);
+    if (remaining < 0) remaining = 0;
+    out_status->remaining_ds = remaining;
+    return 0;
+}

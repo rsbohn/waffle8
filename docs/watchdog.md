@@ -72,3 +72,23 @@ Next actions (optional)
 - Harden config parsing and return clear errors on invalid keys/values.
 - Add an integration test that starts the monitor binary, attaches the watchdog, and verifies runtime behavior end-to-end.
 
+
+
+## Disabling the watchdog from the monitor
+
+You can disable the watchdog interactively from the monitor by entering a short sequence of CPU instructions that clears the AC and writes a zero control word into the watchdog's IOT control register. At the monitor prompt deposit and run:
+
+```
+7300        / CLA
+6551        / IOT 6551
+7402        / HLT
+```
+
+Explanation:
+- `CLA` clears the AC (accumulator) so the control register's COUNT/CMD field will be zero.
+- `IOT 6551` issues the watchdog WRITE IOT with the numeric opcode shown; the device will see AC==0 and thus be disabled (CMD=000).
+- `HLT` halts the CPU so the change takes effect immediately and prevents the CPU from proceeding into any code that might re-enable the watchdog.
+
+Notes:
+- Depending on assembler or monitor syntax you may need to supply the IOT opcode as an explicit octal literal (for example `IOT 06551`). The monitor accepts `IOT <octal>` forms as shown elsewhere in the docs.
+- Use this technique with care: disabling the watchdog removes a safety net for runaway guest programs. Prefer iterating on guest code or configuration changes when possible.

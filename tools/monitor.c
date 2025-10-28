@@ -325,6 +325,24 @@ static void show_devices(const struct monitor_config *config,
         monitor_console_printf("    image            : %s\n", paper_tape_image);
         monitor_console_puts("    status           : (not attached)");
     }
+
+    /* Watchdog device (configured via pdp8.config)
+     * Print only when the watchdog stanza is present; otherwise show not-configured.
+     */
+    if (config && config->watchdog_present) {
+        const char *watchdog_iot = config->watchdog_iot ? config->watchdog_iot : "(unconfigured)";
+        const char *watchdog_mode = config->watchdog_mode ? config->watchdog_mode : "(default)";
+        monitor_console_puts("  Watchdog");
+        monitor_console_printf("    IOT              : %s\n", watchdog_iot);
+        monitor_console_printf("    enabled          : %s\n", config->watchdog_enabled ? "yes" : "no");
+        monitor_console_printf("    mode             : %s\n", watchdog_mode);
+        monitor_console_printf("    periodic         : %s\n", config->watchdog_periodic ? "yes" : "no");
+        monitor_console_printf("    default count    : %d deciseconds\n", config->watchdog_default_count);
+        monitor_console_printf("    pause on halt    : %s\n", config->watchdog_pause_on_halt ? "yes" : "no");
+    } else {
+        monitor_console_puts("  Watchdog");
+        monitor_console_puts("    status           : (not configured)");
+    }
 }
 
 static void show_magtape(const struct monitor_runtime *runtime) {
@@ -376,6 +394,54 @@ static void show_magtape(const struct monitor_runtime *runtime) {
     if (!any) {
         monitor_console_puts("Magtape: no configured units.");
     }
+}
+
+static void show_watchdog(const struct monitor_runtime *runtime) {
+    if (!runtime) return;
+
+    if (!runtime->watchdog) {
+        monitor_console_puts("Watchdog: (device not attached). ");
+        return;
+    }
+
+    struct pdp8_watchdog_status status;
+    if (pdp8_watchdog_get_status(runtime->watchdog, &status) != 0) {
+        monitor_console_puts("Watchdog: unable to retrieve status.");
+        return;
+    }
+
+    const char *cmd_desc = "reserved";
+    switch (status.cmd) {
+        case 0:
+            cmd_desc = "disabled";
+            break;
+        case 1:
+            cmd_desc = "reset (one-shot)";
+            break;
+        case 2:
+            cmd_desc = "reset (periodic)";
+            break;
+        case 3:
+            cmd_desc = "halt (one-shot)";
+            break;
+        case 4:
+            cmd_desc = "halt (periodic)";
+            break;
+        default:
+            cmd_desc = "reserved";
+            break;
+    }
+
+    monitor_console_puts("Watchdog (runtime):");
+    monitor_console_printf("  enabled          : %s\n", status.enabled ? "yes" : "no");
+    monitor_console_printf("  cmd              : %s (%d)\n", cmd_desc, status.cmd);
+    monitor_console_printf("  configured count : %d deciseconds\n", status.configured_count);
+    if (status.remaining_ds >= 0) {
+        monitor_console_printf("  time remaining   : %d deciseconds\n", status.remaining_ds);
+    } else {
+        monitor_console_puts("  time remaining   : (not running)");
+    }
+    monitor_console_printf("  expired          : %s\n", status.expired ? "yes" : "no");
 }
 
 static int parse_number(const char *token, long *value) {
@@ -1206,6 +1272,11 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
 
     if (strcmp(topic, "magtape") == 0) {
         show_magtape(runtime);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(topic, "watchdog") == 0) {
+        show_watchdog(runtime);
         return MONITOR_COMMAND_OK;
     }
 
