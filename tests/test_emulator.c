@@ -692,8 +692,8 @@ static int test_demo_core_fixture(void) {
     pdp8_api_set_pc(cpu, 07000);
     ASSERT_TRUE("core init executed", pdp8_api_run(cpu, 64) > 0);
     ASSERT_TRUE("core init halted", pdp8_api_is_halted(cpu) != 0);
-    ASSERT_EQ("core call vector opcode", 05403, pdp8_api_read_mem(cpu, 0002));
-    ASSERT_EQ("core entry address", 07000, pdp8_api_read_mem(cpu, 0003));
+    ASSERT_EQ("core call vector opcode", 05404, pdp8_api_read_mem(cpu, 0003));
+    ASSERT_EQ("core dispatch address", 07010, pdp8_api_read_mem(cpu, 0004));
 
     pdp8_api_clear_halt(cpu);
     uint16_t start_pc = fixture_start_valid ? fixture_start : 0200;
@@ -888,8 +888,8 @@ int main(int argc, char **argv) {
         {"clear halt", test_clear_halt},
         {"kl8e console", test_kl8e_console},
         {"line printer", test_line_printer},
-        //{"core fixture", test_demo_core_fixture},
-        //{"paper tape parser", test_paper_tape_parser},
+        {"core fixture", test_demo_core_fixture},
+        {"paper tape parser", test_paper_tape_parser},
         {"paper tape device", test_paper_tape_device},
         {"fruit jam board", test_board_spec},
     };

@@ -230,17 +230,19 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
                 if (*p == '\0' || *p == '#') break;
                 char tok[4] = {0};
                 size_t ti = 0;
+                size_t actual_len = 0;
                 while (*p && !isspace((unsigned char)*p) && *p != '#') {
                     if (ti < 3) tok[ti++] = *p;
+                    ++actual_len;
                     ++p;
                 }
                 if (ti == 0) break;
-                /* ensure all chars are octal digits */
+                /* ensure all chars are octal digits and token is not too long */
                 bool ok = true;
                 for (size_t i = 0; i < ti; ++i) {
                     if (tok[i] < '0' || tok[i] > '7') { ok = false; break; }
                 }
-                if (!ok) {
+                if (!ok || actual_len > 3) {
                     any_octal = false;
                     break;
                 }
@@ -273,11 +275,20 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
                     if (*p == '\0' || *p == '#') break;
                     char tok[4] = {0};
                     size_t ti = 0;
+                    size_t actual_len = 0;
                     while (*p && !isspace((unsigned char)*p) && *p != '#') {
                         if (ti < 3) tok[ti++] = *p;
+                        ++actual_len;
                         ++p;
                     }
                     if (ti == 0) break;
+                    if (actual_len > 3) {
+                        free(words);
+                        paper_tape_report_error(line_number, "ASCII-octal token too long (%zu digits, max 3)", actual_len);
+                        pdp8_paper_tape_destroy(image);
+                        fclose(fp);
+                        return -1;
+                    }
                     char *endptr = NULL;
                     long val = strtol(tok, &endptr, 8);
                     if (!endptr || *endptr != '\0' || val < 0 || val > 0xFF) {
