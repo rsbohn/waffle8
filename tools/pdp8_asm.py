@@ -151,6 +151,13 @@ class PDP8Assembler:
             for part in parts:
                 if not self.origins:
                     self.origins.append(location)
+                # DOT: emit current address as a word
+                if part == ".":
+                    self.statements.append(
+                        Statement("emit_addr", location, (location,), line_no, part, raw.rstrip("\n"))
+                    )
+                    location += 1
+                    continue
                 if part.startswith('"') and part.endswith('"') and len(part) >= 2:
                     value = ord(part[1:-1]) & 0x7F
                     self.statements.append(
@@ -307,6 +314,10 @@ class PDP8Assembler:
             word = 0o7000 | bits
             return word & 0x0FFF
 
+        # DOT: emit current address as a word
+        if stmt.kind == "emit_addr":
+            return stmt.address & 0x0FFF
+
         raise AsmError(f"Unhandled statement type '{stmt.kind}'", stmt.line_no, stmt.text)
 
     def second_pass(self) -> Dict[int, int]:
@@ -430,6 +441,8 @@ def render_listing(
             symbol_field = stmt.args[0].upper()
         elif stmt.kind == "data":
             symbol_field = stmt.text.strip() or f"{stmt.args[0]:04o}"
+        elif stmt.kind == "emit_addr":
+            symbol_field = ". (emit addr)"
         else:
             symbol_field = stmt.text.strip()
         symbol_field = symbol_field[:18]
