@@ -1,0 +1,13 @@
+{
+	"servers": {
+		"PDP-8": {
+			"type": "stdio",
+			"command": "/mnt/e/rsbohn/pdp8/.venv/Scripts/python.exe",
+			"args": [
+				"e:/rsbohn/pdp8/web8mcp.py",
+				"stdio"
+			]
+		}
+	},
+	"inputs": []
+}

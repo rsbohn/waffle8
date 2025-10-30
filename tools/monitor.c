@@ -790,6 +790,8 @@ static enum monitor_command_status command_reset(struct monitor_runtime *runtime
                                                  char **state);
 static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
                                                  char **state);
+static enum monitor_command_status command_iot(struct monitor_runtime *runtime,
+                                               char **state);
 
 static const struct monitor_command monitor_commands[] = {
     {"help", command_help, "help [command]", "Show command list or detailed help.", true},
@@ -816,7 +818,66 @@ static const struct monitor_command monitor_commands[] = {
      "Control magnetic tape units (see 'show magtape').",
      true},
     {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
+    {"iot", command_iot, "iot <instruction> <AC>", "Execute IOT instruction with optional AC value.", true},
 };
+
+static enum monitor_command_status command_iot(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *instr_tok = command_next_token(state);
+    if (!instr_tok) {
+        monitor_console_puts("iot requires instruction (octal). Usage: iot <instruction> <AC>");
+        return MONITOR_COMMAND_ERROR;
+    }
+    long instr_val = 0;
+    if (parse_number(instr_tok, &instr_val) != 0 || instr_val < 0 || instr_val > 0x0FFF) {
+        monitor_console_printf("Invalid instruction '%s'.\n", instr_tok);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *ac_tok = command_next_token(state);
+    uint16_t ac_before = pdp8_api_get_ac(runtime->cpu);
+    if (ac_tok) {
+        long ac_val = 0;
+        if (parse_number(ac_tok, &ac_val) != 0 || ac_val < 0 || ac_val > 0x0FFF) {
+            monitor_console_printf("Invalid AC value '%s'.\n", ac_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+        pdp8_api_set_ac(runtime->cpu, (uint16_t)ac_val);
+        ac_before = (uint16_t)ac_val;
+    }
+
+    char *extra = command_next_token(state);
+    if (extra) {
+        monitor_console_puts("iot takes at most two arguments: <instruction> <AC>");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    // Save skip_pending before
+    bool skip_before = false;
+    // Try to get skip_pending if possible (not public API, so we infer after step)
+
+    // Set up instruction at PC, step, then restore PC
+    uint16_t old_pc = pdp8_api_get_pc(runtime->cpu);
+    pdp8_api_write_mem(runtime->cpu, old_pc, (uint16_t)instr_val);
+    int stepped = pdp8_api_step(runtime->cpu);
+    uint16_t ac_after = pdp8_api_get_ac(runtime->cpu);
+    uint16_t new_pc = pdp8_api_get_pc(runtime->cpu);
+
+    monitor_console_printf("IOT %04o executed.\n", (unsigned)instr_val & 0x0FFFu);
+    monitor_console_printf("  AC before: %04o\n", ac_before & 0x0FFFu);
+    monitor_console_printf("  AC after : %04o\n", ac_after & 0x0FFFu);
+    monitor_console_printf("  PC after : %04o\n", new_pc & 0x0FFFu);
+    if (new_pc != ((old_pc + 1) & 0x0FFFu)) {
+        monitor_console_puts("  SKIP: YES");
+    } else {
+        monitor_console_puts("  SKIP: NO");
+    }
+    return MONITOR_COMMAND_OK;
+}
 
 static const struct monitor_command *find_command(const char *name) {
     if (!name) {

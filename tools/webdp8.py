@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from flask import Flask, jsonify, render_template, request
 import ctypes
 import ctypes.util
@@ -21,6 +22,37 @@ app = Flask(
     static_folder=str(STATIC_DIR),
     template_folder=str(TEMPLATES_DIR),
 )
+
+# Set up a simple teleprinter logger (appends entries to logs/teleprinter.log)
+LOG_DIR = ROOT / "logs"
+try:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
+TELE_LOG = LOG_DIR / "teleprinter.log"
+
+def _log_teleprinter(source: str, chunk: bytes, text: str) -> None:
+    """Append a timestamped entry for teleprinter output.
+
+    source: 'file' or 'console' to indicate where data came from
+    chunk: raw bytes
+    text: decoded text (may contain replacement chars)
+    """
+    try:
+        with open(TELE_LOG, "ab") as lf:
+            ts = datetime.utcnow().isoformat() + "Z"
+            lf.write(f"{ts} {source} len={len(chunk)}\n".encode("utf-8"))
+            if chunk:
+                # write octal byte list
+                octs = b" ".join(f"{b:03o}".encode("ascii") for b in chunk)
+                lf.write(b"BYTES: " + octs + b"\n")
+            lf.write(b"TEXT: ")
+            lf.write(text.encode("utf-8", errors="replace"))
+            lf.write(b"\n\n")
+    except Exception:
+        # Logging must not break the server; ignore filesystem errors
+        pass
 
 # --- emulator init (singleton for now) ---
 # Prefer the packaged library under `./factory/libpdp8.so` so the web
@@ -409,6 +441,12 @@ def get_teleprinter_output():
         except Exception:
             text = ""
 
+        # Log teleprinter output for debugging (do not fail on logging errors)
+        try:
+            _log_teleprinter("file", chunk, text)
+        except Exception:
+            pass
+
         return jsonify({"text": text, "bytes": [f"{b:03o}" for b in chunk]})
 
     if _console_obj is None:
@@ -430,6 +468,12 @@ def get_teleprinter_output():
         text = out_bytes.decode("utf-8", errors="replace")
     except Exception:
         text = ""
+
+    # Log teleprinter output retrieved from console buffer
+    try:
+        _log_teleprinter("console", bytes(out_bytes), text)
+    except Exception:
+        pass
 
     return jsonify({"text": text, "bytes": [f"{b:03o}" for b in out_bytes]})
 
@@ -455,7 +499,10 @@ def get_printer_output():
     except Exception:
         text = ""
 
-    return jsonify({"text": text, "bytes": [f"{b:03o}" for b in chunk]})
+    response = jsonify({"text": text, "bytes": [f"{b:03o}" for b in chunk]})
+    logging.debug(f"Printer output: {len(chunk)} bytes")
+    logging.debug(f"Printer text: {text!r}")
+    return response
 
 
 # ---------- keyboard input (queue to KL8E console) ----------

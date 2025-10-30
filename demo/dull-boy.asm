@@ -1,4 +1,7 @@
 / dull-boy.asm
+        *0000
+        JMP I 0001
+        0200
 / Print "All work and no play make Jack a dull boy." on the console repeatedly.
 / Inlines the core PUTS/PUTCH routines so the entire demo lives on page 1 (0200).
 
@@ -75,11 +78,14 @@ DELAY_INNER_INIT, 07400         / -256 for inner loop iterations
 
 / Message text terminated with CR/LF and null
 MESSAGE,
+        0015;
         "A";"l";"l";" ";"w";"o";"r";"k";" ";"a";"n";"d";" ";
         "n";"o";" ";"p";"l";"a";"y";" ";"m";"a";"k";"e";" ";
         "J";"a";"c";"k";" ";"a";" ";"d";"u";"l";"l";" ";"b";"o";"y";".";
         0015;0012;0000
 
-WD_CTRL, 03100                 / control: CMD=3 (HALT one-shot), COUNT=5 deciseconds
+WD_CTRL, 01040                 
+/ 01040 RESET one shot 40 deciseconds
+/ 03005 control: CMD=3 (HALT one-shot), COUNT=5 deciseconds
 
         $
