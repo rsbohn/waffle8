@@ -8,7 +8,8 @@ Supported features:
   * Memory-reference ops: AND, TAD, ISZ, DCA, JMS, JMP (with optional `I`)
   * IOT with explicit numeric operand
   * Group 1 operate micro-ops (CLA, CLL, CMA, CML, RAR, RAL, RTR, RTL, BSW, IAC)
-  * Group 2 operate micro-ops (SMA, SZA, SNL, SPA, SNA, SZL, CLA, OSR, HLT)
+  * Group 2 operate micro-ops (SMA, SZA, SNL, SPA, SNA, SZL, CLA, OSR, HLT, ION, IOFF)
+  * Interrupt control: ION (enable), IOFF (disable)
   * Data words specified as octal literals or quoted characters
   * Multiple statements per line separated by semicolons
 
@@ -72,6 +73,8 @@ GROUP2_BITS = {
     "CLA": 0o0200,
     "OSR": 0o0004,
     "HLT": 0o0002,
+    "ION": 0o0001,  # Enable interrupts (Group 2 operate with bit 0 set)
+    "IOFF": 0o0000, # Disable interrupts (Group 2 operate with no bits set)
 }
 
 SENSE_BIT = 0o0010  # Complements skip sense in group 2 (producing e.g. SNA/SZL/SPA)
