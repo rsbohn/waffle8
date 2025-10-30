@@ -431,7 +431,7 @@ TTY_WAIT,
         IOT 6046                / Transmit character
         JMP I PUTCHR_PTR
 
-        *0600
+        *1000
 TITLE_MSG,
         0115    / M
         0101    / A
@@ -549,7 +549,7 @@ FORMAT_BUF,
         0
         0
 
-        *0740               / Keep CHARMAP away from buffers
+        *1200               / Keep CHARMAP away from buffers
 CHARMAP,
         0040
         0101
