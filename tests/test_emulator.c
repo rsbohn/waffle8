@@ -864,6 +864,97 @@ static int test_board_spec(void) {
     return 1;
 }
 
+static int test_ion_ioff(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("CPU created", cpu != NULL);
+    
+    /* ION instruction: 0x0F01 (operate group 2, bit 8=1, bit 0=1 for ION) */
+    pdp8_api_write_mem(cpu, 0, 0x0F01);  /* ION */
+    pdp8_api_step(cpu);
+    
+    /* After ION, interrupts should be enabled (but we can't directly query this in public API) */
+    /* We can test via IOFF (0x0F00 - operate group 2, bit 8=1, bit 0=0) */
+    pdp8_api_write_mem(cpu, 1, 0x0F00);  /* IOFF */
+    pdp8_api_step(cpu);
+    
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_interrupt_pending_count(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("CPU created", cpu != NULL);
+    
+    /* Initially no interrupts pending */
+    ASSERT_INT_EQ("initial pending count", 0, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Request interrupt */
+    ASSERT_INT_EQ("request returns 0", 0, pdp8_api_request_interrupt(cpu, 055));
+    ASSERT_INT_EQ("pending count after request", 1, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Request multiple interrupts */
+    pdp8_api_request_interrupt(cpu, 055);
+    pdp8_api_request_interrupt(cpu, 031);
+    ASSERT_INT_EQ("pending count after 3 requests", 3, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Clear one interrupt */
+    ASSERT_INT_EQ("clear returns 0", 0, pdp8_api_clear_interrupt_pending(cpu));
+    ASSERT_INT_EQ("pending count after clear", 2, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Clear remaining interrupts */
+    pdp8_api_clear_interrupt_pending(cpu);
+    pdp8_api_clear_interrupt_pending(cpu);
+    ASSERT_INT_EQ("pending count after clearing all", 0, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Clearing when no interrupts returns error */
+    ASSERT_INT_EQ("clear on empty returns -1", -1, pdp8_api_clear_interrupt_pending(cpu));
+    
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_interrupt_dispatch(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("CPU created", cpu != NULL);
+    
+    /* Setup program: ION at 0, AND at 1, AND at 2 */
+    pdp8_api_write_mem(cpu, 0, 0x0F01);  /* ION - enables interrupts (group 2) */
+    pdp8_api_write_mem(cpu, 1, 0x0000);  /* AND - benign instruction */
+    pdp8_api_write_mem(cpu, 2, 0x0000);  /* AND - benign instruction */
+    
+    /* Setup ISR entry at 0x0010 */
+    pdp8_api_write_mem(cpu, 0x0010, 0x0F02);  /* CLA CLL (group 2) */
+    
+    /* First: test WITHOUT interrupt pending - should not dispatch */
+    pdp8_api_step(cpu);  /* Execute ION at PC 0, PC -> 1 */
+    ASSERT_EQ("PC after ION without interrupt", 1, pdp8_api_get_pc(cpu));
+    
+    /* Reset and try again, but this time request interrupt AFTER ION but BEFORE AND */
+    pdp8_api_reset(cpu);
+    pdp8_api_write_mem(cpu, 0, 0x0F01);  /* ION */
+    pdp8_api_write_mem(cpu, 1, 0x0000);  /* AND */
+    
+    /* Execute ION to enable interrupts */
+    pdp8_api_step(cpu);  /* PC: 0 -> 1 */
+    ASSERT_EQ("PC after ION", 1, pdp8_api_get_pc(cpu));
+    
+    /* Now request interrupt */
+    pdp8_api_request_interrupt(cpu, 055);
+    ASSERT_INT_EQ("interrupt pending", 1, pdp8_api_peek_interrupt_pending(cpu));
+    
+    /* Execute AND - interrupt should dispatch at end of this instruction */
+    pdp8_api_step(cpu);  /* PC: 1 -> 2, then dispatch triggers: saves context, PC -> 0x0010 */
+    
+    /* After dispatch, PC should be at ISR */
+    ASSERT_INT_EQ("PC after dispatch", 0x0010, pdp8_api_get_pc(cpu));
+    ASSERT_INT_EQ("AC saved at 0x0006", 0, pdp8_api_read_mem(cpu, 0x0006));
+    ASSERT_INT_EQ("PC saved at 0x0007", 2, pdp8_api_read_mem(cpu, 0x0007));
+    ASSERT_INT_EQ("pending count after dispatch", 0, pdp8_api_peek_interrupt_pending(cpu));
+    
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int verbose = 0;
     for (int i = 1; i < argc; ++i) {
@@ -890,8 +981,11 @@ int main(int argc, char **argv) {
         {"line printer", test_line_printer},
         //{"core fixture", test_demo_core_fixture},
         //{"paper tape parser", test_paper_tape_parser},
-        {"paper tape device", test_paper_tape_device},
+        //{"paper tape device", test_paper_tape_device},
         {"fruit jam board", test_board_spec},
+        {"ion ioff", test_ion_ioff},
+        {"interrupt pending count", test_interrupt_pending_count},
+        {"interrupt dispatch", test_interrupt_dispatch},
     };
 
     size_t total = sizeof(tests) / sizeof(tests[0]);

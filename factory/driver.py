@@ -596,9 +596,19 @@ def main() -> int:
                     else:
                         # Initialize the watchdog control register via IOT if a default count was provided
                         if config.watchdog_default_count > 0:
-                            # default to HALT mode if mode string suggests halt, otherwise RESET
+                            # Parse watchdog mode: "halt", "reset", or "interrupt"
                             mode = (config.watchdog_mode or "").lower()
-                            cmd = 3 if "halt" in mode else 1
+                            if "halt" in mode:
+                                cmd = 3  # HALT_ONE_SHOT (or 4 for HALT_PERIODIC)
+                            elif "interrupt" in mode:
+                                cmd = 5  # INTERRUPT_ONE_SHOT (or 6 for INTERRUPT_PERIODIC)
+                            else:
+                                cmd = 1  # RESET_ONE_SHOT (or 2 for RESET_PERIODIC)
+                            
+                            # Upgrade to periodic if watchdog_periodic is true
+                            if config.watchdog_periodic:
+                                cmd += 1
+                            
                             control = ((cmd & 0x7) << 9) | (config.watchdog_default_count & 0x1FF)
                             execute_iot(lib, cpu, PDP8_WATCHDOG_IOT_BASE | PDP8_WATCHDOG_BIT_WRITE, ac=control)
             except Exception as exc:

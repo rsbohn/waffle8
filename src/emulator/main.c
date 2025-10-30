@@ -26,6 +26,8 @@ struct pdp8 {
     uint16_t switch_register;
     bool halted;
     bool skip_pending;
+    bool interrupt_enable;
+    int interrupt_pending;
     pdp8_iot_handler iot_handlers[64];
     void *iot_contexts[64];
     pdp8_tick_handler tick_handlers[64];
@@ -179,6 +181,10 @@ static void operate_group2(pdp8_t *cpu, uint16_t instruction) {
     if (instruction & 0x0002u) { /* HLT */
         cpu->halted = true;
     }
+    if (instruction & 0x0001u) { /* ION */
+        cpu->interrupt_enable = true;
+    }
+    /* IOFF is implicit: if bit 0x0001 is not set, interrupts remain unchanged */
 
     bool skip = sense ? !any : any;
     if (skip) {
@@ -274,6 +280,8 @@ void pdp8_api_reset(pdp8_t *cpu) {
     cpu->link = 0;
     cpu->halted = false;
     cpu->skip_pending = false;
+    cpu->interrupt_enable = false;
+    cpu->interrupt_pending = 0;
     if (cpu->memory && cpu->memory_words) {
         memset(cpu->memory, 0, cpu->memory_words * sizeof(uint16_t));
     }
@@ -332,6 +340,22 @@ int pdp8_api_step(pdp8_t *cpu) {
     }
 
     apply_skip(cpu);
+
+    /* Interrupt dispatch: check for pending interrupt after instruction execution */
+    if (cpu->interrupt_enable && cpu->interrupt_pending > 0) {
+        /* Save context: AC at 0x0006, PC at 0x0007, LINK at 0x0008 */
+        cpu->memory[6] = cpu->ac;
+        cpu->memory[7] = cpu->pc;
+        cpu->memory[8] = (uint16_t)cpu->link;
+        
+        /* Decrement pending count and disable interrupts */
+        cpu->interrupt_pending--;
+        cpu->interrupt_enable = false;
+        
+        /* Jump to interrupt service routine at 0x0010 */
+        cpu->pc = 0x0010u;
+    }
+
     /* call registered tick handlers with current monotonic time (ns) */
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
@@ -477,4 +501,31 @@ uint16_t pdp8_api_get_switch_register(const pdp8_t *cpu) {
 
 int pdp8_api_is_halted(const pdp8_t *cpu) {
     return (cpu && cpu->halted) ? 1 : 0;
+}
+
+int pdp8_api_request_interrupt(pdp8_t *cpu, uint8_t device_code) {
+    if (!cpu) {
+        return -1;
+    }
+    (void)device_code;  /* Parameter for logging/debugging purposes */
+    cpu->interrupt_pending++;
+    return 0;
+}
+
+int pdp8_api_peek_interrupt_pending(const pdp8_t *cpu) {
+    if (!cpu) {
+        return -1;
+    }
+    return cpu->interrupt_pending;
+}
+
+int pdp8_api_clear_interrupt_pending(pdp8_t *cpu) {
+    if (!cpu) {
+        return -1;
+    }
+    if (cpu->interrupt_pending > 0) {
+        cpu->interrupt_pending--;
+        return 0;
+    }
+    return -1;
 }

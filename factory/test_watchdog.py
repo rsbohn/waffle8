@@ -30,6 +30,8 @@ WD_CMD_RESET_ONE_SHOT = 1
 WD_CMD_RESET_PERIODIC = 2
 WD_CMD_HALT_ONE_SHOT = 3
 WD_CMD_HALT_PERIODIC = 4
+WD_CMD_INTERRUPT_ONE_SHOT = 5
+WD_CMD_INTERRUPT_PERIODIC = 6
 
 
 def instr(bits: int) -> int:
@@ -76,6 +78,16 @@ def configure_signatures(lib: ctypes.CDLL) -> None:
 
     lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
     lib.pdp8_api_is_halted.restype = ctypes.c_int
+
+    # Interrupt API
+    lib.pdp8_api_request_interrupt.argtypes = [ctypes.c_void_p, ctypes.c_uint8]
+    lib.pdp8_api_request_interrupt.restype = ctypes.c_int
+
+    lib.pdp8_api_peek_interrupt_pending.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_peek_interrupt_pending.restype = ctypes.c_int
+
+    lib.pdp8_api_clear_interrupt_pending.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_clear_interrupt_pending.restype = ctypes.c_int
 
     # Watchdog API
     lib.pdp8_watchdog_create.argtypes = []
@@ -193,6 +205,80 @@ def test_one_shot_reset(lib: ctypes.CDLL) -> None:
         lib.pdp8_api_destroy(cpu)
 
 
+def test_interrupt_one_shot(lib: ctypes.CDLL) -> None:
+    cpu = lib.pdp8_api_create(4096)
+    try:
+        wd = lib.pdp8_watchdog_create()
+        assert wd != 0
+        assert lib.pdp8_watchdog_attach(cpu, wd) == 0
+
+        # Set up: PC at 10, interrupts disabled
+        lib.pdp8_api_set_pc(cpu, ctypes.c_uint16(10))
+
+        # write control: INTERRUPT one-shot, count = 1 decisecond
+        ac_val = ((WD_CMD_INTERRUPT_ONE_SHOT & 0x7) << 9) | (1 & 0x1FF)
+        execute_iot(lib, cpu, instr(PDP8_WATCHDOG_BIT_WRITE), ac=ac_val)
+
+        # Initially no interrupts pending
+        assert lib.pdp8_api_peek_interrupt_pending(cpu) == 0
+
+        # Step CPU to allow watchdog tick to fire
+        # This should generate an interrupt request
+        deadline = time.time() + 2.0
+        interrupt_fired = False
+        while time.time() < deadline:
+            lib.pdp8_api_step(cpu)
+            if lib.pdp8_api_peek_interrupt_pending(cpu) > 0:
+                interrupt_fired = True
+                break
+            time.sleep(0.02)
+
+        assert interrupt_fired, "watchdog did not generate interrupt within timeout"
+        print("watchdog one-shot INTERRUPT OK")
+    finally:
+        if 'wd' in locals() and wd:
+            lib.pdp8_watchdog_destroy(wd)
+        lib.pdp8_api_destroy(cpu)
+
+
+def test_interrupt_periodic(lib: ctypes.CDLL) -> None:
+    cpu = lib.pdp8_api_create(4096)
+    try:
+        wd = lib.pdp8_watchdog_create()
+        assert wd != 0
+        assert lib.pdp8_watchdog_attach(cpu, wd) == 0
+
+        # Set up: PC at 10, interrupts disabled
+        lib.pdp8_api_set_pc(cpu, ctypes.c_uint16(10))
+
+        # write control: INTERRUPT periodic, count = 1 decisecond
+        ac_val = ((WD_CMD_INTERRUPT_PERIODIC & 0x7) << 9) | (1 & 0x1FF)
+        execute_iot(lib, cpu, instr(PDP8_WATCHDOG_BIT_WRITE), ac=ac_val)
+
+        # Initially no interrupts pending
+        assert lib.pdp8_api_peek_interrupt_pending(cpu) == 0
+
+        # Step CPU to allow watchdog tick to fire multiple times
+        interrupt_count = 0
+        deadline = time.time() + 3.0  # Watch for ~3 seconds
+        while time.time() < deadline and interrupt_count < 3:
+            lib.pdp8_api_step(cpu)
+            pending = lib.pdp8_api_peek_interrupt_pending(cpu)
+            if pending > 0:
+                interrupt_count += 1
+                # Clear the interrupt so we can count the next one
+                while lib.pdp8_api_clear_interrupt_pending(cpu) == 0:
+                    pass
+            time.sleep(0.02)
+
+        assert interrupt_count >= 2, f"watchdog periodic interrupt fired {interrupt_count} times, expected at least 2"
+        print("watchdog periodic INTERRUPT OK")
+    finally:
+        if 'wd' in locals() and wd:
+            lib.pdp8_watchdog_destroy(wd)
+        lib.pdp8_api_destroy(cpu)
+
+
 if __name__ == '__main__':
     lib = load_library()
     configure_signatures(lib)
@@ -200,5 +286,7 @@ if __name__ == '__main__':
     test_read_write_roundtrip(lib)
     test_one_shot_halt(lib)
     test_one_shot_reset(lib)
+    test_interrupt_one_shot(lib)
+    test_interrupt_periodic(lib)
 
     print('watchdog tests completed')
