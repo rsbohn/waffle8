@@ -812,7 +812,7 @@ static const struct monitor_command monitor_commands[] = {
     {"show", command_show, "show devices", "Display configured peripherals.", true},
     {"magtape",
      command_magtape,
-     "magtape <rewind|new> <unit>",
+     "magtape <unit> <rewind|new|next>",
      "Control magnetic tape units (see 'show magtape').",
      true},
     {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
@@ -1295,12 +1295,6 @@ static enum monitor_command_status command_magtape(struct monitor_runtime *runti
         return MONITOR_COMMAND_ERROR;
     }
 
-    char *action = command_next_token(state);
-    if (!action) {
-        monitor_console_puts("magtape requires an action (rewind|new).");
-        return MONITOR_COMMAND_ERROR;
-    }
-
     char *unit_tok = command_next_token(state);
     if (!unit_tok) {
         monitor_console_puts("magtape requires a unit number.");
@@ -1314,6 +1308,12 @@ static enum monitor_command_status command_magtape(struct monitor_runtime *runti
     }
 
     unsigned unit = (unsigned)unit_value;
+
+    char *action = command_next_token(state);
+    if (!action) {
+        monitor_console_puts("magtape requires an action (rewind|new|next).");
+        return MONITOR_COMMAND_ERROR;
+    }
 
     if (strcmp(action, "rewind") == 0) {
         if (pdp8_magtape_device_rewind(runtime->magtape, unit) != 0) {
@@ -1330,6 +1330,15 @@ static enum monitor_command_status command_magtape(struct monitor_runtime *runti
             return MONITOR_COMMAND_ERROR;
         }
         monitor_console_printf("Magtape unit %u will create a new record on next write.\n", unit);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(action, "next") == 0) {
+        if (pdp8_magtape_device_next_record(runtime->magtape, unit) != 0) {
+            monitor_console_printf("Unable to advance to next record on unit %u (end of tape).\n", unit);
+            return MONITOR_COMMAND_ERROR;
+        }
+        monitor_console_printf("Magtape unit %u advanced to next record.\n", unit);
         return MONITOR_COMMAND_OK;
     }
 

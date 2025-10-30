@@ -69,6 +69,7 @@ int pdp8_magtape_device_attach(pdp8_t *cpu, pdp8_magtape_device_t *device);
 int pdp8_magtape_device_configure_unit(pdp8_magtape_device_t *device,
                                        const struct pdp8_magtape_unit_params *params);
 int pdp8_magtape_device_rewind(pdp8_magtape_device_t *device, unsigned unit);
+int pdp8_magtape_device_next_record(pdp8_magtape_device_t *device, unsigned unit);
 int pdp8_magtape_device_force_new_record(pdp8_magtape_device_t *device, unsigned unit);
 int pdp8_magtape_device_get_status(const pdp8_magtape_device_t *device,
                                    unsigned unit,

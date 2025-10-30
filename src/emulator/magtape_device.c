@@ -896,6 +896,32 @@ int pdp8_magtape_device_rewind(pdp8_magtape_device_t *device, unsigned unit_numb
     return 0;
 }
 
+int pdp8_magtape_device_next_record(pdp8_magtape_device_t *device, unsigned unit_number) {
+    struct magtape_unit *unit = find_unit(device, unit_number);
+    if (!unit || !unit->configured) {
+        return -1;
+    }
+
+    if (unit->current_record + 1u >= unit->record_count) {
+        unit->end_of_tape = true;
+        return -1; /* End of tape */
+    }
+
+    unit->current_record++;
+    unit->position = 0u;
+    unit->end_of_record = false;
+    unit->end_of_tape = (unit->current_record + 1u >= unit->record_count);
+
+    if (unit->record_count > 0u) {
+        struct magtape_record *record = &unit->records[unit->current_record];
+        unit->ready = record->word_count > 0u;
+    } else {
+        unit->ready = false;
+    }
+
+    return 0;
+}
+
 int pdp8_magtape_device_force_new_record(pdp8_magtape_device_t *device, unsigned unit_number) {
     struct magtape_unit *unit = find_unit(device, unit_number);
     if (!unit || !unit->configured) {
