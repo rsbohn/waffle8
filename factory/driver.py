@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, IO, List, Optional, Tuple
+from typing import Callable, Dict, IO, List, Optional, Tuple
 
 import ctypes
 
@@ -199,6 +199,12 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_api_get_link.argtypes = [ctypes.c_void_p]
     lib.pdp8_api_get_link.restype = ctypes.c_uint8
 
+    lib.pdp8_api_set_halt.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_set_halt.restype = None
+
+    lib.pdp8_api_clear_halt.argtypes = [ctypes.c_void_p]
+    lib.pdp8_api_clear_halt.restype = None
+
     lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
     lib.pdp8_api_is_halted.restype = ctypes.c_int
 
@@ -322,7 +328,11 @@ def install_reset_vector(lib: ctypes.CDLL, cpu: int, start_address: int) -> None
 
 
 def pump_console_input(
-    lib: ctypes.CDLL, console: int, stdin_fd: int, echo_stream: Optional[IO[str]] = None
+    lib: ctypes.CDLL,
+    console: int,
+    stdin_fd: int,
+    echo_stream: Optional[IO[str]] = None,
+    control_handler: Optional[Callable[[int], bool]] = None,
 ) -> bool:
     if not console or stdin_fd < 0:
         return True
@@ -346,11 +356,30 @@ def pump_console_input(
         echo_stream.flush()
 
     for byte in data:
+        if control_handler and not control_handler(byte):
+            continue
         value = 0x0D if byte == 0x0A else (byte & 0x7F)
         if lib.pdp8_kl8e_console_queue_input(console, ctypes.c_uint8(value)) != 0:
             raise EmulatorError("Failed to queue console input.")
 
     return True
+
+
+def drain_console_output(lib: ctypes.CDLL, console: int) -> int:
+    if not console:
+        return 0
+
+    lib.pdp8_kl8e_console_flush(console)
+    emitted = 0
+    while lib.pdp8_kl8e_console_output_pending(console):
+        byte = ctypes.c_uint8(0)
+        if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
+            break
+        emitted += 1
+    if emitted and KL8E_CHAR_PERIOD > 0.0:
+        time.sleep(emitted * KL8E_CHAR_PERIOD)
+    sys.stdout.flush()
+    return emitted
 
 
 def run_factory(
@@ -359,43 +388,43 @@ def run_factory(
     console: int,
     stdin_fd: int,
     echo_stream: Optional[IO[str]] = None,
+    control_handler: Optional[Callable[[int], bool]] = None,
 ) -> int:
     total_cycles = 0
-    while not lib.pdp8_api_is_halted(cpu):
-        if not pump_console_input(lib, console, stdin_fd, echo_stream):
+    was_halted = bool(lib.pdp8_api_is_halted(cpu))
+    if was_halted:
+        print("\nHALT detected. Press Ctrl-G to resume.", file=sys.stderr)
+
+    while True:
+        if not pump_console_input(lib, console, stdin_fd, echo_stream, control_handler):
             break
+
+        halted = bool(lib.pdp8_api_is_halted(cpu))
+        if halted and not was_halted:
+            print("\nHALT detected. Press Ctrl-G to resume.", file=sys.stderr)
+        elif not halted and was_halted:
+            print("\nResuming execution.", file=sys.stderr)
+        was_halted = halted
+
+        if halted:
+            drain_console_output(lib, console)
+            time.sleep(0.05)
+            continue
 
         executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(RUN_BLOCK_CYCLES))
         if executed < 0:
             raise EmulatorError("Emulator reported an error during execution.")
         if executed == 0:
+            if lib.pdp8_api_is_halted(cpu):
+                was_halted = True
+                continue
             break
         total_cycles += executed
 
-        if console:
-            lib.pdp8_kl8e_console_flush(console)
-            emitted = 0
-            while lib.pdp8_kl8e_console_output_pending(console):
-                byte = ctypes.c_uint8(0)
-                if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
-                    break
-                emitted += 1
-            if emitted and KL8E_CHAR_PERIOD > 0.0:
-                time.sleep(emitted * KL8E_CHAR_PERIOD)
-                sys.stdout.flush()
+        drain_console_output(lib, console)
 
-    pump_console_input(lib, console, stdin_fd, echo_stream)
-    if console:
-        lib.pdp8_kl8e_console_flush(console)
-        emitted = 0
-        while lib.pdp8_kl8e_console_output_pending(console):
-            byte = ctypes.c_uint8(0)
-            if lib.pdp8_kl8e_console_pop_output(console, ctypes.byref(byte)) != 0:
-                break
-            emitted += 1
-        if emitted and KL8E_CHAR_PERIOD > 0.0:
-            time.sleep(emitted * KL8E_CHAR_PERIOD)
-        sys.stdout.flush()
+    pump_console_input(lib, console, stdin_fd, echo_stream, control_handler)
+    drain_console_output(lib, console)
     return total_cycles
 
 
@@ -645,7 +674,17 @@ def main() -> int:
                     continue
                 print("Enter 'go' to run or 'quit' to exit.")
 
-        total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream)
+        def handle_control(byte: int) -> bool:
+            if byte == 0x14:  # Ctrl-T
+                lib.pdp8_api_set_halt(cpu)
+                return False
+            if byte == 0x07:  # Ctrl-G
+                if lib.pdp8_api_is_halted(cpu):
+                    lib.pdp8_api_clear_halt(cpu)
+                return False
+            return True
+
+        total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream, handle_control)
         report_state(lib, cpu, total_cycles)
 
     finally:
