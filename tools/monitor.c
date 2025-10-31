@@ -427,6 +427,12 @@ static void show_watchdog(const struct monitor_runtime *runtime) {
         case 4:
             cmd_desc = "halt (periodic)";
             break;
+        case 5:
+            cmd_desc = "interrupt (one-shot)";
+            break;
+        case 6:
+            cmd_desc = "interrupt (periodic)";
+            break;
         default:
             cmd_desc = "reserved";
             break;
@@ -795,7 +801,7 @@ static const struct monitor_command monitor_commands[] = {
     {"help", command_help, "help [command]", "Show command list or detailed help.", true},
     {"quit", command_quit, "quit", "Exit the monitor.", true},
     {"exit", command_quit, "exit", "Exit the monitor (alias of quit).", false},
-    {"regs", command_regs, "regs", "Show registers and halt state.", true},
+    {"regs", command_regs, "regs", "Show registers, halt, interrupt enable, and pending count.", true},
     {"switch",
      command_switch,
      "switch [value|load [value]]",
@@ -901,12 +907,16 @@ static enum monitor_command_status command_regs(struct monitor_runtime *runtime,
     uint8_t link = pdp8_api_get_link(runtime->cpu);
     uint16_t sw = pdp8_api_get_switch_register(runtime->cpu);
     bool halted = pdp8_api_is_halted(runtime->cpu) != 0;
-    monitor_console_printf("PC=%04o AC=%04o LINK=%o SW=%04o HALT=%s\n",
+    int ion_state = pdp8_api_is_interrupt_enabled(runtime->cpu);
+    int pending = pdp8_api_peek_interrupt_pending(runtime->cpu);
+    monitor_console_printf("PC=%04o AC=%04o LINK=%o SW=%04o HALT=%s ION=%s INT=%d\n",
                            pc & 0x0FFFu,
                            ac & 0x0FFFu,
                            link & 0x1u,
                            sw & 0x0FFFu,
-                           halted ? "yes" : "no");
+                           halted ? "yes" : "no",
+                           ion_state == 1 ? "on" : "off",
+                           pending);
     return MONITOR_COMMAND_OK;
 }
 

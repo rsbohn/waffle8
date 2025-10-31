@@ -343,17 +343,17 @@ int pdp8_api_step(pdp8_t *cpu) {
 
     /* Interrupt dispatch: check for pending interrupt after instruction execution */
     if (cpu->interrupt_enable && cpu->interrupt_pending > 0) {
-        /* Save context: AC at 0x0006, PC at 0x0007, LINK at 0x0008 */
-        cpu->memory[6] = cpu->ac;
-        cpu->memory[7] = cpu->pc;
-        cpu->memory[8] = (uint16_t)cpu->link;
+        /* Save context: AC at octal 0006, PC at octal 0007, LINK at octal 0010 */
+        cpu->memory[006] = cpu->ac;
+        cpu->memory[007] = cpu->pc;
+        cpu->memory[010] = (uint16_t)cpu->link;
         
         /* Decrement pending count and disable interrupts */
         cpu->interrupt_pending--;
         cpu->interrupt_enable = false;
         
-        /* Jump to interrupt service routine at 0x0010 */
-        cpu->pc = 0x0010u;
+        /* Jump to interrupt service routine at octal 0020 */
+        cpu->pc = 020;
     }
 
     /* call registered tick handlers with current monotonic time (ns) */
@@ -528,4 +528,11 @@ int pdp8_api_clear_interrupt_pending(pdp8_t *cpu) {
         return 0;
     }
     return -1;
+}
+
+int pdp8_api_is_interrupt_enabled(const pdp8_t *cpu) {
+    if (!cpu) {
+        return -1;
+    }
+    return cpu->interrupt_enable ? 1 : 0;
 }

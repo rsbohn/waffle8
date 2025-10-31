@@ -10,10 +10,20 @@ extern "C" {
 
 #define PDP8_WATCHDOG_DEVICE_CODE 055u
 #define PDP8_WATCHDOG_IOT_BASE (06000u | ((PDP8_WATCHDOG_DEVICE_CODE & 0x3Fu) << 3))
-#define PDP8_WATCHDOG_BIT_WRITE 0x1u /* write control register */
-#define PDP8_WATCHDOG_BIT_READ 0x2u  /* read control register */
-#define PDP8_WATCHDOG_BIT_RESTART 0x4u /* restart counter */
-#define PDP8_WATCHDOG_INSTR(bits) (PDP8_WATCHDOG_IOT_BASE | (uint16_t)((bits) & 0x7u))
+
+/* Discrete IOT function codes (microcode field) */
+#define PDP8_WATCHDOG_FUNC_NOP     0x0u /* 6550 - no operation */
+#define PDP8_WATCHDOG_FUNC_ISK     0x1u /* 6551 - Interrupt Skip if expired flag set */
+#define PDP8_WATCHDOG_FUNC_WRITE   0x2u /* 6552 - write control register from AC */
+#define PDP8_WATCHDOG_FUNC_READ    0x3u /* 6553 - read control register into AC */
+#define PDP8_WATCHDOG_FUNC_RESTART 0x4u /* 6554 - restart counter */
+
+/* Instruction constructors */
+#define PDP8_WATCHDOG_INSTR(func) (PDP8_WATCHDOG_IOT_BASE | (uint16_t)((func) & 0x7u))
+#define PDP8_WATCHDOG_ISK  PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_FUNC_ISK)     /* 6551 */
+#define PDP8_WATCHDOG_WRITE PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_FUNC_WRITE)  /* 6552 */
+#define PDP8_WATCHDOG_READ  PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_FUNC_READ)   /* 6553 */
+#define PDP8_WATCHDOG_RESTART PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_FUNC_RESTART) /* 6554 */
 
 /* Command encodings for control register (3-bit field) */
 #define PDP8_WD_CMD_DISABLE 0

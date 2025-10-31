@@ -42,9 +42,9 @@ int pdp8_api_is_halted(const pdp8_t *cpu);
  * When a device wants service, it asserts the line. Multiple devices are
  * handled by re-triggering the ISR after each device is serviced.
  *
- * Interrupt Handler Pattern:
+ * Interrupt Handler Pattern (octal addresses):
  *
- *   0x0010 (ISR Entry Point):
+ *   0020 (ISR Entry Point):
  *       ISK 6551        ; Check watchdog (device 55)
  *       JMP TRY2        ; No
  *       JMS HANDLE_WD   ; Yes, service watchdog
@@ -54,24 +54,24 @@ int pdp8_api_is_halted(const pdp8_t *cpu);
  *       JMS HANDLE_KBD  ; Yes, service keyboard
  *   DONE:
  *       ION             ; Re-enable interrupts
- *       JMP I 0x0007    ; Return to interrupted instruction (saved by CPU)
+ *       JMP I 0007      ; Return to interrupted instruction (saved by CPU)
  *
  * Context Save Layout (automatic, done by CPU at interrupt dispatch):
- *   0x0006: AC (accumulator)
- *   0x0007: PC (return address = next instruction after interrupt)
- *   0x0008: LINK
+ *   0006: AC (accumulator)
+ *   0007: PC (return address = next instruction after interrupt)
+ *   0010: LINK
  *
  * When interrupt is pending and interrupts are enabled, CPU will:
- *   1. Save AC, PC, LINK to 0x0006-0x0008
+ *   1. Save AC, PC, LINK to octal 0006-0010
  *   2. Decrement interrupt_pending counter
  *   3. Disable interrupts (ION state is cleared)
- *   4. Jump to ISR at 0x0010
+ *   4. Jump to ISR at octal 0020
  *
  * ISR must:
  *   1. Poll all devices to determine which ones need service
  *   2. Service them (clearing their request flags)
  *   3. Re-enable interrupts with ION
- *   4. Return with JMP I 0x0007
+ *   4. Return with JMP I 0007
  */
 
 /* Request interrupt: increment pending count.
@@ -87,6 +87,11 @@ int pdp8_api_peek_interrupt_pending(const pdp8_t *cpu);
 /* Decrement interrupt pending count (called after ISR services a device).
  * Returns 0 if successfully decremented, -1 if cpu is NULL or count was 0. */
 int pdp8_api_clear_interrupt_pending(pdp8_t *cpu);
+
+/* Query interrupt enable state.
+ * Returns 1 if interrupts are enabled (ION executed), 0 if disabled (IOFF or reset),
+ * or -1 if cpu is NULL. */
+int pdp8_api_is_interrupt_enabled(const pdp8_t *cpu);
 
 #ifdef __cplusplus
 }

@@ -82,30 +82,44 @@ static void watchdog_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
     pdp8_watchdog_t *wd = (pdp8_watchdog_t *)context;
     if (!wd || !cpu) return;
 
-    uint8_t micro = (uint8_t)(instruction & 0x7u);
+    uint8_t func = (uint8_t)(instruction & 0x7u);
     uint64_t now = now_ns();
 
-    if (micro & PDP8_WATCHDOG_BIT_WRITE) {
-        uint16_t ac = pdp8_api_get_ac(cpu) & 0x0FFFu;
-        uint8_t cmd = (uint8_t)((ac >> 9) & 0x7u);
-        uint16_t count = (uint16_t)(ac & WATCHDOG_COUNT_MASK);
-        wd->cmd = cmd;
-        wd->configured_count = (uint16_t)(count & WATCHDOG_COUNT_MASK);
-        wd->expired = 0;
-        wd->enabled = (wd->cmd != WD_CMD_DISABLE) ? 1 : 0;
-        if (wd->enabled) {
-            /* start counting immediately */
-            uint64_t delta_ns = (uint64_t)wd->configured_count * 100000000ull;
-            wd->expiry_ns = now + delta_ns;
+    switch (func) {
+    case 0x0u: /* NOP - do nothing */
+        break;
+
+    case 0x1u: /* ISK - Interrupt Skip if expired flag set */
+        if (wd->expired) {
+            pdp8_api_request_skip(cpu);
         }
-    }
+        break;
 
-    if (micro & PDP8_WATCHDOG_BIT_READ) {
-        uint16_t word = (uint16_t)(((wd->cmd & 0x7u) << 9) | (wd->configured_count & WATCHDOG_COUNT_MASK));
-        pdp8_api_set_ac(cpu, word);
-    }
+    case 0x2u: /* WRITE - load control register from AC */
+        {
+            uint16_t ac = pdp8_api_get_ac(cpu) & 0x0FFFu;
+            uint8_t cmd = (uint8_t)((ac >> 9) & 0x7u);
+            uint16_t count = (uint16_t)(ac & WATCHDOG_COUNT_MASK);
+            wd->cmd = cmd;
+            wd->configured_count = (uint16_t)(count & WATCHDOG_COUNT_MASK);
+            wd->expired = 0;
+            wd->enabled = (wd->cmd != WD_CMD_DISABLE) ? 1 : 0;
+            if (wd->enabled) {
+                /* start counting immediately */
+                uint64_t delta_ns = (uint64_t)wd->configured_count * 100000000ull;
+                wd->expiry_ns = now + delta_ns;
+            }
+        }
+        break;
 
-    if (micro & PDP8_WATCHDOG_BIT_RESTART) {
+    case 0x3u: /* READ - read control register into AC */
+        {
+            uint16_t word = (uint16_t)(((wd->cmd & 0x7u) << 9) | (wd->configured_count & WATCHDOG_COUNT_MASK));
+            pdp8_api_set_ac(cpu, word);
+        }
+        break;
+
+    case 0x4u: /* RESTART - restart counter */
         wd->expired = 0;
         if (wd->configured_count == 0) {
             /* immediate expiry on restart if zero */
@@ -115,6 +129,14 @@ static void watchdog_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
             wd->expiry_ns = now + delta_ns;
         }
         wd->enabled = (wd->cmd != WD_CMD_DISABLE) ? 1 : 0;
+        break;
+
+    case 0x5u:
+    case 0x6u:
+    case 0x7u:
+        /* Undefined functions - in real hardware would raise a fault condition */
+        /* For now, we silently ignore, but could log a warning */
+        break;
     }
 }
 
