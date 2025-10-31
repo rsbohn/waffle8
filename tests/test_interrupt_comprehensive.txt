@@ -1,0 +1,30 @@
+# Comprehensive interrupt test: watchdog interrupt + ISK polling
+
+# Set up interrupt save area
+dep 006 0 0 0
+
+# Set up ISR at 020: check watchdog with SKON, return if not set
+dep 020 6551
+dep 021 5400
+
+# Set up main code at 200: enable interrupts, set watchdog, wait for interrupt
+# 0200: ION (6001)
+# 0201: Initialize watchdog (WRITE with count=1)  
+# 0202: Loop waiting for watchdog to fire
+# 0203: HLT (after interrupt returns here)
+dep 200 6001
+dep 201 6554
+
+# Display initial state
+regs
+mem 6 4
+
+# Enable watchdog in interrupt mode with very short timeout
+# The watchdog should fire almost immediately
+
+# Run ISR setup code and main code with watchdog
+run 200 5
+
+# Check if we halted (watchdog should fire and ISR returns)
+regs
+mem 6 4

@@ -1,0 +1,18 @@
+# Test ION/IOFF/SKON instructions via interrupt_control device
+
+# Test 1: IOFF (6000 octal) - disable interrupts
+dep 0 6000
+run 0 1
+regs
+
+# Test 2: ION (6001 octal) - enable interrupts  
+dep 0 6001
+run 0 1
+regs
+
+# Test 3: SKON (6002 octal) - skip if ION enabled
+# Set up code: SKON (6002), JMP 0 (5000)
+dep 0 6002
+dep 1 5000
+run 0 2
+regs

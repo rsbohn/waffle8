@@ -280,6 +280,14 @@ def configure_api(lib: ctypes.CDLL) -> None:
         # older builds may not export these symbols; caller should handle gracefully
         pass
 
+    # Interrupt control API (device 00; required for ION/IOFF/SKON)
+    try:
+        lib.pdp8_interrupt_control_attach.argtypes = [ctypes.c_void_p]
+        lib.pdp8_interrupt_control_attach.restype = ctypes.c_int
+    except AttributeError:
+        # older builds may not export this symbol; caller should handle gracefully
+        pass
+
 
 def write_word(lib: ctypes.CDLL, cpu: int, address: int, value: int) -> None:
     result = lib.pdp8_api_write_mem(cpu, ctypes.c_uint16(address), ctypes.c_uint16(value & 0x0FFF))
@@ -522,6 +530,11 @@ def main() -> int:
     stdin_fd = -1
 
     try:
+        # Attach interrupt control device (device 00; handles ION/IOFF/SKON)
+        if hasattr(lib, "pdp8_interrupt_control_attach"):
+            if lib.pdp8_interrupt_control_attach(cpu) != 0:
+                raise EmulatorError("Failed to attach interrupt control device.")
+
         console = lib.pdp8_kl8e_console_create(None, None)
         if not console:
             raise EmulatorError("Failed to create KL8E console.")

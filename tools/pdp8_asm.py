@@ -7,9 +7,10 @@ Supported features:
   * Labels in the form `LABEL,`
   * Memory-reference ops: AND, TAD, ISZ, DCA, JMS, JMP (with optional `I`)
   * IOT with explicit numeric operand
+  * IOT mnemonics: SKON (skip if interrupt on)
   * Group 1 operate micro-ops (CLA, CLL, CMA, CML, RAR, RAL, RTR, RTL, BSW, IAC)
   * Group 2 operate micro-ops (SMA, SZA, SNL, SPA, SNA, SZL, CLA, OSR, HLT, ION, IOFF)
-  * Interrupt control: ION (enable), IOFF (disable)
+  * Interrupt control: ION (enable), IOFF (disable), SKON (skip if on)
   * Data words specified as octal literals or quoted characters
   * Multiple statements per line separated by semicolons
 
@@ -78,6 +79,10 @@ GROUP2_BITS = {
 }
 
 SENSE_BIT = 0o0010  # Complements skip sense in group 2 (producing e.g. SNA/SZL/SPA)
+
+IOT_MNEMONICS = {
+    "SKON": 0o6002,  # Skip if Interrupt ON (device 00, function 2)
+}
 
 
 @dataclass
@@ -203,6 +208,15 @@ class PDP8Assembler:
                         raise AsmError("IOT requires a single numeric operand", line_no, part)
                     self.statements.append(
                         Statement("iot", location, (tokens[1],), line_no, part, raw.rstrip("\n"))
+                    )
+                    location += 1
+                    continue
+
+                if op in IOT_MNEMONICS:
+                    # IOT mnemonic like SKON - assemble as a direct IOT value
+                    # Format as octal string to preserve the intended value
+                    self.statements.append(
+                        Statement("iot", location, (f"0o{IOT_MNEMONICS[op]:o}",), line_no, part, raw.rstrip("\n"))
                     )
                     location += 1
                     continue

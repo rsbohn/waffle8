@@ -93,6 +93,11 @@ int pdp8_api_clear_interrupt_pending(pdp8_t *cpu);
  * or -1 if cpu is NULL. */
 int pdp8_api_is_interrupt_enabled(const pdp8_t *cpu);
 
+/* Set interrupt enable state (called by ION/IOFF instructions).
+ * enable: 1 to enable interrupts, 0 to disable.
+ * Returns 0 on success, -1 if cpu is NULL. */
+int pdp8_api_set_interrupt_enable(pdp8_t *cpu, int enable);
+
 #ifdef __cplusplus
 }
 #endif

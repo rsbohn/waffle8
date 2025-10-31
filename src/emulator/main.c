@@ -181,10 +181,16 @@ static void operate_group2(pdp8_t *cpu, uint16_t instruction) {
     if (instruction & 0x0002u) { /* HLT */
         cpu->halted = true;
     }
-    if (instruction & 0x0001u) { /* ION */
+    /* Interrupt control (Group 2 bit 0): ION/IOFF */
+    /* Pure 7400 (IOFF) disables interrupts; pure 7401 (ION) enables them */
+    /* When combined with other operations, only 7401 bit is significant */
+    if ((instruction & 0x0001u) == 0u && (instruction & 0x00FEu) == 0u) {
+        /* Pure IOFF (7400): disable interrupts */
+        cpu->interrupt_enable = false;
+    } else if (instruction & 0x0001u) {
+        /* ION (7401 and variants): enable interrupts */
         cpu->interrupt_enable = true;
     }
-    /* IOFF is implicit: if bit 0x0001 is not set, interrupts remain unchanged */
 
     bool skip = sense ? !any : any;
     if (skip) {
@@ -535,4 +541,12 @@ int pdp8_api_is_interrupt_enabled(const pdp8_t *cpu) {
         return -1;
     }
     return cpu->interrupt_enable ? 1 : 0;
+}
+
+int pdp8_api_set_interrupt_enable(pdp8_t *cpu, int enable) {
+    if (!cpu) {
+        return -1;
+    }
+    cpu->interrupt_enable = enable ? true : false;
+    return 0;
 }

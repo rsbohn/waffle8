@@ -23,6 +23,7 @@
 #include "../src/monitor_platform.h"
 #include <strings.h>
 #include "../src/emulator/watchdog.h"
+#include "../src/emulator/interrupt_control.h"
 
 typedef struct {
     uint32_t state[4];
@@ -1520,6 +1521,12 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         return false;
     }
 
+    /* Attach interrupt control device (device 00; handles ION/IOFF/SKON) */
+    if (pdp8_interrupt_control_attach(runtime->cpu) != 0) {
+        monitor_runtime_teardown(runtime);
+        return false;
+    }
+
     g_console = runtime->console;
 
     runtime->printer = monitor_platform_create_printer();
@@ -1601,7 +1608,7 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
             uint16_t control = (uint16_t)(((cmd & 0x7) << 9) | (count & 0x1FF));
             /* write control register via IOT */
             pdp8_api_set_ac(runtime->cpu, control);
-            pdp8_api_write_mem(runtime->cpu, 0u, PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_BIT_WRITE));
+            pdp8_api_write_mem(runtime->cpu, 0u, PDP8_WATCHDOG_INSTR(PDP8_WATCHDOG_WRITE));
             pdp8_api_set_pc(runtime->cpu, 0u);
             pdp8_api_step(runtime->cpu);
         }
