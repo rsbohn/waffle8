@@ -369,9 +369,11 @@ def run_factory(
     echo_stream: Optional[IO[str]] = None,
 ) -> int:
     total_cycles = 0
+    input_fd = stdin_fd
     while not lib.pdp8_api_is_halted(cpu):
-        if not pump_console_input(lib, console, stdin_fd, echo_stream):
-            break
+        if input_fd >= 0:
+            if not pump_console_input(lib, console, input_fd, echo_stream):
+                input_fd = -1
 
         executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(RUN_BLOCK_CYCLES))
         if executed < 0:
@@ -392,7 +394,7 @@ def run_factory(
                 time.sleep(emitted * KL8E_CHAR_PERIOD)
                 sys.stdout.flush()
 
-    pump_console_input(lib, console, stdin_fd, echo_stream)
+    pump_console_input(lib, console, input_fd, echo_stream)
     if console:
         lib.pdp8_kl8e_console_flush(console)
         emitted = 0

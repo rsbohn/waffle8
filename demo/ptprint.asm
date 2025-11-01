@@ -34,25 +34,8 @@ START,  CLA CLL                 / Clear AC and Link
         IOT 6672                / Select block on paper tape
         JMS RDLOOP
         ISZ BLKNUM              / Increment block number for next read
-        CLA CLL
-        TAD BLKNUM
-        IOT 6672
-        JMS RDLOOP
-        ISZ BLKNUM
-        CLA CLL
-        TAD BLKNUM
-        IOT 6672
-        JMS RDLOOP
-        ISZ BLKNUM
-        CLA CLL
-        TAD BLKNUM
-        IOT 6672
-        JMS RDLOOP
-        ISZ BLKNUM
-        CLA CLL
-        TAD BLKNUM
-        IOT 6672
-        JMS RDLOOP
+	JMP START
+	7402
         JMP DONE
 
 / Main read and print loop - don't check ready immediately after select
