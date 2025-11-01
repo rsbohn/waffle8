@@ -18,29 +18,48 @@ LOOP,   CLA CLL
         TAD BLKNUM
         IOT 6672        / select block
         JMS BLKREAD     / read and print block
+	CLA CLL
+	TAD CONDEOT
+	SZA
+	JMP DONE	/ EOT means DONE
         ISZ BLKNUM      / next block
         JMP LOOP
 DONE,   JMS FFEED
         HLT
 
+CONDEOT,0		/ If non-zero we have reached EOT
 WDMODE, 03400
 BLKNUM, 1
 TAPEWD, 0
 N_CR,   07762
 NL,     00013
-EOT,    07777             / EOT detected (got busy twice from IOT 6671)
+MEOT,   07001             / EOT detect mask
+EMASK,	0377
+
+EOTP,	0		/ Test character for EOT
+	CLL CLA
+	TAD TAPEWD
+	AND EMASK	/ 0777
+	TAD MEOT	/ 7001
+	JMP I EOTP	/ AC is zero if we just read EOT marker
 
 BLKREAD, 0
         IOT 6671        / skip if ready
-        JMP PTBUSY     / check for double /ready
+        JMP I BLKREAD	/ end of block
         IOT 6551        / skip if watchdog expired
         IOT 6554        / restart watchdog
         IOT 6674        / Read next word
         DCA TAPEWD
 
         JMS PUTCH
+	JMS EOTP	/ EOT?
+	SZA
+	JMP CRP		/ NOT EOT: continue
+	CMA
+	DCA CONDEOT	/ save it
+	JMP I BLKREAD	/ EOT: return
         / add a CR after NL
-        CLA
+CRP,    CLA
         TAD TAPEWD
         TAD N_CR
         SZA
@@ -48,20 +67,6 @@ BLKREAD, 0
         TAD NL
         JMS PUTCH
 BLKEND, JMP BLKREAD     / loop
-
-STAR,    0052
-PTBUSY,
-        CLA CLL         / PTBUSY
-        TAD STAR
-        DCA TAPEWD
-        JMS PUTCH
-        IOT 6671        / try again
-        ISZ EOT         / we just want to increment EOT from -1 to zero.
-        JMP DONE
-        CLA CLL         / reset EOT
-        CMA             / make it 07777
-        DCA EOT
-        JMP I BLKREAD   / just one -- continue
 
 FFEED,  0
         CLL CLA
