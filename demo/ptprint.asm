@@ -32,6 +32,8 @@
 START,  CLA CLL                 / Clear AC and Link
         TAD BLKNUM              / Load block number to read
         IOT 6672                / Select block on paper tape
+        IOT 6671                / Skip if paper tape ready
+        JMP NOTAPE              / If not ready, report error
         JMS RDLOOP
         ISZ BLKNUM              / Increment block number for next read
 	JMP START
