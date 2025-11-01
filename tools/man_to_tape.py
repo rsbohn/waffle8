@@ -33,6 +33,9 @@ def text_to_ascii_tape(text: str, tape_id: str = "MA") -> str:
             tape_lines.append(tape_line)
             line_num += 1
     
+    # Add end-of-tape marker
+    tape_lines.append(f"{tape_id}{line_num:03o}: 777")
+    
     return "\n".join(tape_lines)
 
 

@@ -8,6 +8,7 @@ In addition to the SIXBIT format documented in `hardware-667x-papertape.md`, the
 - The remainder of the line contains up to 64 octal-encoded ASCII character values (000-377)
 - Each octal value represents one ASCII character
 - Line feeds are encoded as `012` (octal for ASCII 10)
+- Tapes end with `777` (end-of-tape marker) as the final word
 
 Example (`tapes/8asm-man.tape`):
 ```
@@ -65,6 +66,7 @@ The key difference from SIXBIT reading is:
 - No character pair extraction needed
 - Mask to 8 bits (`AND 0377`) instead of 6 bits
 - Direct ASCII-to-printer output without conversion table
+- Check for end-of-tape marker (777) to terminate reading
 
 ## Files
 
