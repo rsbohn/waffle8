@@ -30,6 +30,30 @@ OUTPUT_MAX_LINES = 20
 DEFAULT_REFRESH_SEC = 0.05
 
 
+# Watchdog status structure (matches struct pdp8_watchdog_status from watchdog.h)
+class WatchdogStatus(ctypes.Structure):
+    _fields_ = [
+        ("enabled", ctypes.c_int),
+        ("expired", ctypes.c_int),
+        ("cmd", ctypes.c_int),
+        ("configured_count", ctypes.c_int),
+        ("remaining_ds", ctypes.c_int),
+    ]
+
+
+# Watchdog command mode names
+WD_CMD_NAMES = {
+    0: "DISABLED",
+    1: "RESET_ONE_SHOT",
+    2: "RESET_PERIODIC",
+    3: "HALT_ONE_SHOT",
+    4: "HALT_PERIODIC",
+    5: "INTERRUPT_ONE_SHOT",
+    6: "INTERRUPT_PERIODIC",
+    7: "UNKNOWN",
+}
+
+
 def _stream_isatty(stream: object) -> bool:
     try:
         return bool(getattr(stream, "isatty")())
@@ -76,6 +100,11 @@ def parse_args() -> argparse.Namespace:
 def initialise_emulator(image: Path) -> PanelState:
     lib = factory_driver.load_library()
     factory_driver.configure_api(lib)
+
+    # Configure watchdog status API if available
+    if hasattr(lib, "pdp8_watchdog_get_status"):
+        lib.pdp8_watchdog_get_status.argtypes = [ctypes.c_void_p, ctypes.POINTER(WatchdogStatus)]
+        lib.pdp8_watchdog_get_status.restype = ctypes.c_int
 
     config, _ = factory_driver.load_device_config(Path("pdp8.config"))
     rom_words, start_word = factory_driver.load_srec(image)
@@ -260,39 +289,71 @@ def draw_panel(stdscr: curses.window, state: PanelState, output_buffer: Deque[st
     ac = state.lib.pdp8_api_get_ac(state.cpu) & 0x0FFF
     link = state.lib.pdp8_api_get_link(state.cpu) & 0x1
 
+    # Get watchdog status if available
+    wd_enabled = False
+    wd_mode = "N/A"
+    wd_config = "N/A"
+    wd_remaining = "N/A"
+    wd_expired = "N/A"
+    
+    if state.watchdog and hasattr(state.lib, "pdp8_watchdog_get_status"):
+        wd_status = WatchdogStatus()
+        if state.lib.pdp8_watchdog_get_status(state.watchdog, ctypes.byref(wd_status)) == 0:
+            wd_enabled = bool(wd_status.enabled)
+            wd_mode = WD_CMD_NAMES.get(wd_status.cmd, f"CMD{wd_status.cmd}")
+            wd_config = f"{wd_status.configured_count}ds"
+            wd_remaining = f"{wd_status.remaining_ds}ds" if wd_status.remaining_ds >= 0 else "N/A"
+            wd_expired = "YES" if wd_status.expired else "NO"
+
+    # Draw main title
     title = f"PDP-8 Front Panel — {status}"
-    stdscr.addnstr(0, 0, title.ljust(width), width)
+    stdscr.addnstr(0, 0, title, width)
+
+    # Draw watchdog panel in top right (if watchdog exists)
+    wd_panel_width = 28
+    if state.watchdog and width > wd_panel_width + 2:
+        wd_x = width - wd_panel_width - 1
+        # Box border
+        stdscr.addnstr(0, wd_x, "+" + "-" * (wd_panel_width - 2) + "+", wd_panel_width)
+        stdscr.addnstr(1, wd_x, f"| WATCHDOG{' ' * (wd_panel_width - 11)}|", wd_panel_width)
+        stdscr.addnstr(2, wd_x, f"| Mode: {wd_mode:<16} |", wd_panel_width)
+        stdscr.addnstr(3, wd_x, f"| Timeout: {wd_config:<13} |", wd_panel_width)
+        stdscr.addnstr(4, wd_x, f"| Remain: {wd_remaining:<14} |", wd_panel_width)
+        stdscr.addnstr(5, wd_x, f"| Expired: {wd_expired:<13} |", wd_panel_width)
+        stdscr.addnstr(6, wd_x, "+" + "-" * (wd_panel_width - 2) + "+", wd_panel_width)
 
     stdscr.addnstr(
         1,
         0,
-        f"Image: {state.image_path} ",
-        width,
+        f"Image: {state.image_path.name} ",
+        min(width - wd_panel_width - 2 if state.watchdog else width, width),
     )
     stdscr.addnstr(
         2,
         0,
-        (
-            f"Cycles: {state.total_cycles}    PC: {pc:04o}    AC: {ac:04o}    "
-            f"LINK: {link}    HALT: {'yes' if halted else 'no'}"
-        ),
-        width,
+        f"Cycles: {state.total_cycles}",
+        min(width - wd_panel_width - 2 if state.watchdog else width, width),
     )
     stdscr.addnstr(
         3,
         0,
-        (
-            "Controls (starts paused): space=pause/resume, s=step (1 instr), q=quit; "
-            "printable keys send console input"
-        ),
+        f"PC: {pc:04o}  AC: {ac:04o}  LINK: {link}  HALT: {'yes' if halted else 'no'}",
+        min(width - wd_panel_width - 2 if state.watchdog else width, width),
+    )
+    stdscr.addnstr(
+        4,
+        0,
+        "Controls: [space]=pause/resume [s]=step [q]=quit",
         width,
     )
-    stdscr.hline(4, 0, "-", width)
+    stdscr.hline(5, 0, "-", width)
 
-    available_rows = height - 6
+    # Console output starts at line 7
+    output_start_line = 7
+    available_rows = height - output_start_line - 1
     output_lines = list(output_buffer)[-available_rows:] if available_rows > 0 else []
     for idx, line in enumerate(output_lines):
-        stdscr.addnstr(5 + idx, 0, line, width)
+        stdscr.addnstr(output_start_line + idx, 0, line, width)
 
     stdscr.refresh()
 
