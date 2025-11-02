@@ -8,6 +8,10 @@
 #include <errno.h>
 #include <stdbool.h>
 
+static bool is_valid_label_char(int ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9');
+}
+
 /* Helper to report parsing errors with line numbers. */
 static void paper_tape_report_error(size_t line_number, const char *fmt, ...) {
     va_list ap;
@@ -156,7 +160,8 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
     size_t parser_used_capacity = 0;
     size_t parser_used_count = 0;
     int *parser_used = NULL; /* parallel array to image->blocks for quick reporting */
-    while (fgets(line, sizeof(line), fp) != NULL) {
+    bool end_of_tape = false;
+    while (!end_of_tape && fgets(line, sizeof(line), fp) != NULL) {
         ++line_number;
 
         char *cursor = line;
@@ -167,8 +172,11 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             continue;
         }
 
-        if (!isupper((unsigned char)cursor[0]) || !isupper((unsigned char)cursor[1])) {
-            paper_tape_report_error(line_number, "expected two-letter label at start of line");
+        if (cursor[0] == '\0' || cursor[1] == '\0' ||
+            !is_valid_label_char((unsigned char)cursor[0]) ||
+            !is_valid_label_char((unsigned char)cursor[1])) {
+            paper_tape_report_error(line_number,
+                "expected two-character label (A-Z or 0-9) at start of line");
             pdp8_paper_tape_destroy(image);
             fclose(fp);
             return -1;
@@ -215,40 +223,64 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             *newline = '\0';
         }
 
-    uint16_t *words = NULL;
+        uint16_t *words = NULL;
         size_t word_count = 0;
-    int this_parser = -1;
-    if (parse_bits(bit_text, &words, &word_count) != 0) {
+        int this_parser = -1;
+        bool end_marker_only = false;
+        if (parse_bits(bit_text, &words, &word_count) != 0) {
             /* If parse_bits fails, try ASCII-octal token format (one ASCII byte per token). */
             /* Attempt to parse tokens like 070 101 123 or 012 for newline, octal 000-377. */
             const char *p = bit_text;
             bool any_octal = false;
+            bool saw_rubout_marker = false;
             /* Count tokens first */
             size_t token_count = 0;
             while (*p) {
-                while (isspace((unsigned char)*p)) ++p;
-                if (*p == '\0' || *p == '#') break;
+                while (isspace((unsigned char)*p)) {
+                    ++p;
+                }
+                if (*p == '\0' || *p == '#') {
+                    break;
+                }
                 char tok[4] = {0};
                 size_t ti = 0;
                 while (*p && !isspace((unsigned char)*p) && *p != '#') {
-                    if (ti < 3) tok[ti++] = *p;
+                    if (ti < 3) {
+                        tok[ti++] = *p;
+                    }
                     ++p;
                 }
-                if (ti == 0) break;
+                if (ti == 0) {
+                    break;
+                }
                 /* ensure all chars are octal digits */
                 bool ok = true;
                 for (size_t i = 0; i < ti; ++i) {
-                    if (tok[i] < '0' || tok[i] > '7') { ok = false; break; }
+                    if (tok[i] < '0' || tok[i] > '7') {
+                        ok = false;
+                        break;
+                    }
                 }
                 if (!ok) {
                     any_octal = false;
+                    break;
+                }
+                if (ti == 3 && tok[0] == '7' && tok[1] == '7' && tok[2] == '7') {
+                    saw_rubout_marker = true;
+                    any_octal = true;
                     break;
                 }
                 any_octal = true;
                 ++token_count;
             }
 
-            if (any_octal && token_count > 0) {
+            if (saw_rubout_marker && token_count == 0) {
+                this_parser = PARSER_ASCII_OCTAL;
+                word_count = 0;
+                words = NULL;
+                end_of_tape = true;
+                end_marker_only = true;
+            } else if (any_octal && token_count > 0) {
                 /* allocate words and parse tokens into 12-bit words (zero-extended 8-bit ASCII)
                    each token is octal, range 000-377 (0-255 decimal) */
                 if (token_count > PDP8_PAPER_TAPE_MAX_HALFWORDS) {
@@ -269,15 +301,27 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
                 p = bit_text;
                 size_t wi = 0;
                 while (*p) {
-                    while (isspace((unsigned char)*p)) ++p;
-                    if (*p == '\0' || *p == '#') break;
+                    while (isspace((unsigned char)*p)) {
+                        ++p;
+                    }
+                    if (*p == '\0' || *p == '#') {
+                        break;
+                    }
                     char tok[4] = {0};
                     size_t ti = 0;
                     while (*p && !isspace((unsigned char)*p) && *p != '#') {
-                        if (ti < 3) tok[ti++] = *p;
+                        if (ti < 3) {
+                            tok[ti++] = *p;
+                        }
                         ++p;
                     }
-                    if (ti == 0) break;
+                    if (ti == 0) {
+                        break;
+                    }
+                    if (ti == 3 && tok[0] == '7' && tok[1] == '7' && tok[2] == '7') {
+                        saw_rubout_marker = true;
+                        break;
+                    }
                     char *endptr = NULL;
                     long val = strtol(tok, &endptr, 8);
                     if (!endptr || *endptr != '\0' || val < 0 || val > 0xFF) {
@@ -291,6 +335,9 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
                 }
                 word_count = wi;
                 this_parser = PARSER_ASCII_OCTAL;
+                if (saw_rubout_marker) {
+                    end_of_tape = true;
+                }
             } else {
                 /* not an ASCII-octal line either */
                 analyze_bit_text(line_number, bit_text);
@@ -302,6 +349,10 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             }
         } else {
             this_parser = PARSER_BITS;
+        }
+
+        if (end_of_tape && end_marker_only) {
+            break;
         }
 
         if (image->label[0] == '\0') {
@@ -352,6 +403,10 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             parser_used_capacity = newcap;
         }
         parser_used[parser_used_count++] = this_parser;
+
+        if (end_of_tape) {
+            break;
+        }
     }
 
     fclose(fp);

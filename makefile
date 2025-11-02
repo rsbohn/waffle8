@@ -32,7 +32,7 @@ FACTORY_SOURCES = $(wildcard src/emulator/*.c)
 $(FACTORY_LIB): $(FACTORY_SOURCES)
 	$(HOST_CC) $(HOST_CFLAGS) -fPIC -shared $^ -o $@
 
-monitor: $(MONITOR_OBJS)
+monitor: $(FACTORY_LIB) $(MONITOR_OBJS)
 	$(HOST_CC) $(HOST_CFLAGS) $(filter %.c,$^) -o $@
 
 tools/pdp8_bench: $(PDP8_BENCH_OBJS)
