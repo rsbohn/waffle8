@@ -123,14 +123,20 @@ START,  CLA CLL
         DCA WEEK_COUNT
         DCA FORMAT_FLAGS
 
+        JMP LOAD_INPUTS
+
         / Inline error characters placed in page 1 so direct TAD works
 ERR_Q1,  0077
 ERR_Q2,  0077
 ERR_Q3,  0077
 NEG_12, 07764
 
-        CLA                     / Load requested year from S (switch register)
-        OSR
+LOAD_INPUTS,
+        CLA                     / Load requested year (default or switch override)
+        TAD YEAR_IN_PTR
+        DCA PTR
+        CLA
+        TAD I PTR
         DCA YEAR_VALUE
 
         CLA                     / Load requested month (1-12)
@@ -664,8 +670,8 @@ PRINT_CAL_DONE,
 
         *02000                   / Page 8: input slots and pointer tables
 
-YEAR_IN,        0000            / Requested year (1957-2099 inclusive)
-MONTH_IN,       0000            / Requested month (1-12)
+YEAR_IN,        3655            / Requested year (1957-2099 inclusive)
+MONTH_IN,       0001            / Requested month (1-12)
 
 MONTH_NAME_PTRS,
         JAN_STR
