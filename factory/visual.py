@@ -313,14 +313,14 @@ def draw_panel(stdscr: curses.window, state: PanelState, output_buffer: Deque[st
     wd_panel_width = 28
     if state.watchdog and width > wd_panel_width + 2:
         wd_x = width - wd_panel_width - 1
-        # Box border
-        stdscr.addnstr(0, wd_x, "+" + "-" * (wd_panel_width - 2) + "+", wd_panel_width)
-        stdscr.addnstr(1, wd_x, f"| WATCHDOG{' ' * (wd_panel_width - 11)}|", wd_panel_width)
-        stdscr.addnstr(2, wd_x, f"| Mode: {wd_mode:<16} |", wd_panel_width)
-        stdscr.addnstr(3, wd_x, f"| Timeout: {wd_config:<13} |", wd_panel_width)
-        stdscr.addnstr(4, wd_x, f"| Remain: {wd_remaining:<14} |", wd_panel_width)
-        stdscr.addnstr(5, wd_x, f"| Expired: {wd_expired:<13} |", wd_panel_width)
-        stdscr.addnstr(6, wd_x, "+" + "-" * (wd_panel_width - 2) + "+", wd_panel_width)
+        # Box border (no right edge)
+        stdscr.addnstr(0, wd_x, "+" + "-" * (wd_panel_width - 2), wd_panel_width)
+        stdscr.addnstr(1, wd_x, f"| WATCHDOG", wd_panel_width)
+        stdscr.addnstr(2, wd_x, f"| Mode: {wd_mode:<16}", wd_panel_width)
+        stdscr.addnstr(3, wd_x, f"| Timeout: {wd_config:<13}", wd_panel_width)
+        stdscr.addnstr(4, wd_x, f"| Remain: {wd_remaining:<14}", wd_panel_width)
+        stdscr.addnstr(5, wd_x, f"| Expired: {wd_expired:<13}", wd_panel_width)
+        stdscr.addnstr(6, wd_x, "+" + "-" * (wd_panel_width - 2), wd_panel_width)
 
     stdscr.addnstr(
         1,
