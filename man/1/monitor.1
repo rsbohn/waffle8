@@ -1,0 +1,139 @@
+.TH MONITOR 1 "November 2025" "waffle8" "PDP-8 Development Tools"
+.SH NAME
+monitor \- interactive PDP-8 front panel and device console
+.SH SYNOPSIS
+.B monitor
+.RI [ image ]
+.SH DESCRIPTION
+.B monitor
+launches the waffle8 PDP-8 emulator with an interactive console that mimics
+front-panel controls and basic device management.  When an S-record
+.I image
+is supplied, it is loaded into memory before the prompt appears; otherwise the
+emulator starts with the board ROM only.
+.PP
+On startup the monitor reads
+.I pdp8.config
+to attach peripherals (KL8E console, line printer, paper tape, magtape, etc.).
+All interaction is performed at the monitor prompt
+.B pdp8>
+using the commands below.  Unless noted, numerical arguments are interpreted as
+octal; prefix with
+.B #
+for decimal or
+.B 0x
+for hexadecimal.
+.SH COMMANDS
+.TP
+.B help [command]
+List available commands or show detailed help for
+.IR command .
+.TP
+.B quit
+Exit the monitor.  The alias
+.B exit
+behaves identically.
+.TP
+.B regs
+Display PC, AC, LINK, switch register, HALT state, interrupt enable, and pending
+interrupt count.
+.TP
+.B switch [value \fR|\fP load [value]]
+Show or set the twelve-bit switch register.  The
+.B switch load
+form optionally updates the register and loads the value into the PC.
+.TP
+.B mem \fIaddr\fP [count]
+Dump
+.I count
+words of memory starting at
+.IR addr .
+.TP
+.B dep \fIaddr\fP \fIw0\fP [w1 ...]
+Deposit consecutive words beginning at
+.IR addr .
+.TP
+.B c [cycles]
+Continue execution in blocks of up to 2000 cycles.  Defaults to one cycle.
+.TP
+.B t [cycles]
+Execute exactly
+.I cycles
+(default 1), printing PC/AC/LINK after each step.  Example:
+.BR "t 5" .
+.TP
+.B run \fIaddr\fP \fIcycles\fP
+Set PC to
+.I addr
+and run for
+.I cycles
+instructions.
+.TP
+.B save \fIfile\fP
+Write the entire 4K RAM image to
+.IR file .
+.TP
+.B restore \fIfile\fP
+Load a RAM image previously saved with
+.BR save .
+.TP
+.B read \fIfile\fP
+Load a Motorola S-record program into memory.
+.TP
+.B show devices
+Display the configured peripherals and their status.  Additional subtopics (for
+example,
+.B show magtape
+) may appear depending on the configuration.
+.TP
+.B magtape \fIunit\fP \fBrewind\fR|\fBnew\fR|\fBnext\fR
+Control magtape units: rewind current record, force a new output record, or
+advance to the next record on readable units.
+.TP
+.B reset
+Reset the CPU and reload the board ROM.
+.SH FILES
+.TP
+.I pdp8.config
+Monitor configuration describing attached devices.
+.TP
+.I tapes/*.tape
+Paper tape images referenced from the configuration.
+.TP
+.I magtape/*.tap
+Records written by magtape unit 1 (default path).
+.SH EXAMPLES
+.TP
+1.
+Load a program and run 1000 cycles:
+.RS
+.B monitor demo/ptprint.srec
+.br
+.B run 0200 1000
+.br
+.B quit
+.RE
+.TP
+2.
+Display five traced instructions starting at the current PC:
+.RS
+.B t 5
+.RE
+.TP
+3.
+Deposit a small bootstrap and start it:
+.RS
+.B dep 0200 7300 1026 6701 6024
+.br
+.B run 0200 20
+.RE
+.SH SEE ALSO
+.BR monitor_driver.py (1),
+.BR pdp8.config (5)
+.SH NOTES
+All output is routed through the KL8E teleprinter device; long-running commands
+may appear to pause while the console drains pending characters.  Use the
+.B c
+command for coarse execution and
+.B t
+when you need a precise instruction trace.

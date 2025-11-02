@@ -1,0 +1,103 @@
+.TH MONITOR_DRIVER 1 "November 2025" "waffle8" "PDP-8 Development Tools"
+.SH NAME
+monitor_driver.py \- issue scripted command sequences to the PDP-8 monitor
+.SH SYNOPSIS
+.B monitor_driver.py
+.RB [ \-\-monitor
+.IR path ]
+.RB [ \-\-image
+.IR file ]
+.RB [ \-\-command-file
+.IR cmdfile ]
+.RB [ \-\-prompt
+.IR string ]
+.RB [ \-\-timeout
+.IR seconds ]
+.RB [ \-\-echo \fR|\fP \-\-no-echo ]
+.RI [ command ... ]
+.SH DESCRIPTION
+.B monitor_driver.py
+launches the waffle8
+.BR monitor (1)
+program and feeds it commands one by one, waiting for the monitor prompt to
+reappear after each command.  This avoids the race conditions that occur when
+piping a batch of commands directly into
+.B monitor
+while it is still emitting output.
+.PP
+Commands can be provided on the command line, from a command file, or both.
+Every command is terminated with a newline automatically.  By default all
+monitor output is echoed to stdout as it arrives.
+.SH OPTIONS
+.TP
+.BI \-\-monitor " path"
+Path to the monitor executable.  Defaults to
+.IR ./monitor .
+.TP
+.BI \-\-image " file"
+Optional Motorola S-record image passed to the monitor at startup.
+.TP
+.BI \-\-command-file " cmdfile"
+Read additional commands (one per line, comments starting with
+.B #
+) from
+.IR cmdfile .
+.TP
+.BI \-\-prompt " string"
+Prompt string to wait for between commands.  Defaults to
+.BR "pdp8> " .
+.TP
+.BI \-\-timeout " seconds"
+Maximum time to wait for monitor output when searching for the prompt
+(default 10 seconds).  A timeout terminates the driver with a non-zero exit.
+.TP
+.B \-\-echo
+Print monitor output as it arrives (default).
+.TP
+.B \-\-no-echo
+Suppress real-time echo; all accumulated output is written at exit.
+.TP
+.I command ...
+One or more commands to send to the monitor after any command-file entries.
+Commands containing spaces should be quoted by the shell.
+.SH COMMAND SOURCES
+Commands are processed in this order:
+.RS
+.IP 1. 3
+Lines from
+.B \-\-command-file
+(if supplied), skipping blank lines and those beginning with
+.B # .
+.IP 2. 3
+Positional commands on the command line, in the order provided.
+.RE
+.SH EXAMPLES
+.TP
+1.
+Inspect the configured devices and exit:
+.RS
+.B monitor_driver.py \-\-image demo/fixture.srec "show devices" quit
+.RE
+.TP
+2.
+Run a short scripted session stored in
+.I scripts/reset.txt
+without echoing intermediate output:
+.RS
+.B monitor_driver.py \-\-no-echo \-\-command-file scripts/reset.txt
+.RE
+.TP
+3.
+Send a one-off trace command to an already configured monitor:
+.RS
+.B monitor_driver.py t 5 quit
+.RE
+.SH SEE ALSO
+.BR monitor (1),
+.BR pdp8.config (5)
+.SH NOTES
+The driver terminates the monitor cleanly by closing stdin after all commands
+are delivered.  If the monitor exits unexpectedly, the driver propagates the
+monitor's exit status.  All commands are executed sequentially; interactive
+replies from the monitor (for example, deposited memory dumps) must complete
+before the next command is sent.

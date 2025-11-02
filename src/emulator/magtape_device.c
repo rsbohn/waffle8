@@ -492,7 +492,14 @@ static int load_record_from_file(struct magtape_unit *unit,
     }
 
     if (rc != 0) {
-        return -1;
+        if (partial) {
+            /* Treat truncated files as empty partial records instead of failing the unit. */
+            record.words = NULL;
+            record.word_count = 0u;
+            record.partial = true;
+        } else {
+            return -1;
+        }
     }
 
     record.name = duplicate_string(name);
