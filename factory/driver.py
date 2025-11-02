@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Start execution immediately without prompting for 'go'.",
     )
+    parser.add_argument(
+        "--block-cycles",
+        type=int,
+        default=RUN_BLOCK_CYCLES,
+        help="Number of cycles to execute per emulator run block (default: %(default)s).",
+    )
     return parser.parse_args()
 
 
@@ -367,15 +373,17 @@ def run_factory(
     console: int,
     stdin_fd: int,
     echo_stream: Optional[IO[str]] = None,
+    block_cycles: int = RUN_BLOCK_CYCLES,
 ) -> int:
     total_cycles = 0
     input_fd = stdin_fd
+    cycles_per_block = block_cycles if block_cycles > 0 else RUN_BLOCK_CYCLES
     while not lib.pdp8_api_is_halted(cpu):
         if input_fd >= 0:
             if not pump_console_input(lib, console, input_fd, echo_stream):
                 input_fd = -1
 
-        executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(RUN_BLOCK_CYCLES))
+        executed = lib.pdp8_api_run(cpu, ctypes.c_size_t(cycles_per_block))
         if executed < 0:
             raise EmulatorError("Emulator reported an error during execution.")
         if executed == 0:
@@ -670,7 +678,7 @@ def main() -> int:
                     continue
                 print("Enter 'go' to run or 'quit' to exit.")
 
-        total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream)
+        total_cycles = run_factory(lib, cpu, console, stdin_fd, echo_stream, args.block_cycles)
         report_state(lib, cpu, total_cycles)
 
     finally:
