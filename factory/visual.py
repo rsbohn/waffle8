@@ -259,15 +259,16 @@ def poll_console_output(state: PanelState, buffer: Deque[str]) -> int:
         if state.lib.pdp8_kl8e_console_pop_output(state.console, ctypes.byref(byte)) != 0:
             break
         ch = byte.value & 0x7F
-        if ch == 0x0D:
-            append_output(buffer, "\n")
-        elif ch == 0x0A:
-            continue
+        if ch == 0x0D:  # CR
+            append_output(buffer, "\r\n")  # CRLF
+        elif ch == 0x0A:  # LF
+            append_output(buffer, "\r\n")  # CRLF
+        elif ch == 0x09:  # TAB
+            append_output(buffer, "    ")  # 4 spaces
         elif 0x20 <= ch <= 0x7E:
             append_output(buffer, chr(ch))
         emitted += 1
     return emitted
-
 
 def queue_console_input(state: PanelState, char_code: int) -> None:
     if not state.console:
