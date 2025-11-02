@@ -73,6 +73,7 @@ class PanelState:
     total_cycles: int = 0
     paused: bool = True
     exiting: bool = False
+    show_listing: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,6 +106,11 @@ def initialise_emulator(image: Path) -> PanelState:
     if hasattr(lib, "pdp8_watchdog_get_status"):
         lib.pdp8_watchdog_get_status.argtypes = [ctypes.c_void_p, ctypes.POINTER(WatchdogStatus)]
         lib.pdp8_watchdog_get_status.restype = ctypes.c_int
+
+    # Configure interrupt status API if available
+    if hasattr(lib, "pdp8_api_is_interrupt_enabled"):
+        lib.pdp8_api_is_interrupt_enabled.argtypes = [ctypes.c_void_p]
+        lib.pdp8_api_is_interrupt_enabled.restype = ctypes.c_int
 
     config, _ = factory_driver.load_device_config(Path("pdp8.config"))
     rom_words, start_word = factory_driver.load_srec(image)
@@ -288,6 +294,12 @@ def draw_panel(stdscr: curses.window, state: PanelState, output_buffer: Deque[st
     pc = state.lib.pdp8_api_get_pc(state.cpu) & 0x0FFF
     ac = state.lib.pdp8_api_get_ac(state.cpu) & 0x0FFF
     link = state.lib.pdp8_api_get_link(state.cpu) & 0x1
+    
+    # Get interrupt status
+    int_enabled = False
+    if hasattr(state.lib, "pdp8_api_is_interrupt_enabled"):
+        int_enabled = bool(state.lib.pdp8_api_is_interrupt_enabled(state.cpu))
+    int_status = "[ION]" if int_enabled else "[IOFF]"
 
     # Get watchdog status if available
     wd_enabled = False
@@ -337,23 +349,38 @@ def draw_panel(stdscr: curses.window, state: PanelState, output_buffer: Deque[st
     stdscr.addnstr(
         3,
         0,
-        f"PC: {pc:04o}  AC: {ac:04o}  LINK: {link}  HALT: {'yes' if halted else 'no'}",
+        f"PC: {pc:04o}  AC: {ac:04o}  LINK: {link}  HALT: {'yes' if halted else 'no'}  {int_status}",
         min(width - wd_panel_width - 2 if state.watchdog else width, width),
     )
     stdscr.addnstr(
         4,
         0,
-        "Controls: [space]=pause/resume [s]=step [q]=quit",
+        "Controls: [space]=pause/resume [s]=step [=]=listing [q]=quit",
         width,
     )
-    stdscr.hline(5, 0, "-", width)
+    stdscr.hline(5, 0, "-", width * 5 // 8)
 
-    # Console output starts at line 7
+    # Console output or program listing starts at line 7
     output_start_line = 7
     available_rows = height - output_start_line - 1
-    output_lines = list(output_buffer)[-available_rows:] if available_rows > 0 else []
-    for idx, line in enumerate(output_lines):
-        stdscr.addnstr(output_start_line + idx, 0, line, width)
+    
+    if state.show_listing:
+        # Show program listing starting at PC
+        listing_lines = []
+        start_addr = pc
+        for i in range(available_rows):
+            addr = (start_addr + i) & 0x0FFF
+            word = state.lib.pdp8_api_read_mem(state.cpu, ctypes.c_uint16(addr)) & 0x0FFF
+            marker = ">" if addr == pc else " "
+            listing_lines.append(f"{marker} {addr:04o}  {word:04o}")
+        
+        for idx, line in enumerate(listing_lines):
+            stdscr.addnstr(output_start_line + idx, 0, line, width)
+    else:
+        # Show console output
+        output_lines = list(output_buffer)[-available_rows:] if available_rows > 0 else []
+        for idx, line in enumerate(output_lines):
+            stdscr.addnstr(output_start_line + idx, 0, line, width)
 
     stdscr.refresh()
 
@@ -397,6 +424,9 @@ def panel_loop(
                 elif key == ord(" "):
                     state.paused = not state.paused
                     handled = True
+                elif key == ord("="):
+                    state.show_listing = not state.show_listing
+                    handled = True
                 elif key == ord("s"):
                     handled = True
                     if state.paused and not state.lib.pdp8_api_is_halted(state.cpu):
@@ -439,6 +469,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except KeyboardInterrupt:
+        print("Terminated by user.", file=sys.stderr)
+        sys.exit(0)
     except factory_driver.EmulatorError as exc:
         print(f"visual: {exc}", file=sys.stderr)
         sys.exit(1)
