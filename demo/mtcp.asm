@@ -168,14 +168,11 @@ WRITE_WORD, 0
 
 /------------------------------------------------------------
 / WRITE_HEADER
-/   Emit length, label, and format header words for the current block.
+/   Emit label and format header words for the current block.
+/   Note: The magtape device automatically manages the record length,
+/   so we only write the 6-word header (3 for label + 3 for format).
 /------------------------------------------------------------
 WRITE_HEADER, 0
-        CLA
-        TAD BLKLEN
-        DCA TAPEWD
-        JMS I P_WRITE_WORD
-
         CLA
         TAD HEADER_LABEL0
         DCA TAPEWD
