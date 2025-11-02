@@ -3,11 +3,11 @@
 / 
 / This program walks through sequential blocks exposed by the paper tape
 / device (667x) and streams every word to the writable magtape unit (unit 1).
-/ Each block is prefixed with a magtape header consisting of a length word
-/ followed by a six-character label and format string encoded in SIXBIT
-/ (three words each). Blocks are processed in ascending order starting at
-/ block 1 by default, unless the console switch register supplies an override
-/ on entry.
+/ Each block is prefixed with a magtape header consisting of a six-character
+/ label and format string encoded in SIXBIT (three words each). The magtape
+/ device automatically manages the record length. Blocks are processed in
+/ ascending order starting at block 1 by default, unless the console switch
+/ register supplies an override on entry.
 / 
 / Usage:
 /   1. From the monitor, ensure magtape unit 1 is ready for a fresh record:
