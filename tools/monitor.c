@@ -1350,6 +1350,14 @@ static enum monitor_command_status command_magtape(struct monitor_runtime *runti
             return MONITOR_COMMAND_ERROR;
         }
         monitor_console_printf("Magtape unit %u advanced to next record.\n", unit);
+        struct pdp8_magtape_unit_status status;
+        if (pdp8_magtape_device_get_status(runtime->magtape, unit, &status) == 0 &&
+            status.configured && status.record_count > 0u &&
+            status.record_index < status.record_count) {
+            monitor_console_printf("Current record: %zu/%zu.\n",
+                                   status.record_index + 1u,
+                                   status.record_count);
+        }
         return MONITOR_COMMAND_OK;
     }
 

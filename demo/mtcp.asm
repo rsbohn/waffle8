@@ -3,11 +3,10 @@
 / 
 / This program walks through sequential blocks exposed by the paper tape
 / device (667x) and streams every word to the writable magtape unit (unit 1).
-/ Each block is prefixed with a magtape header consisting of a length word
-/ followed by a six-character label and format string encoded in SIXBIT
-/ (three words each). Blocks are processed in ascending order starting at
-/ block 1 by default, unless the console switch register supplies an override
-/ on entry.
+/ Each block is prefixed with a magtape header consisting of a six-character
+/ label and format string encoded in SIXBIT (three words each). Blocks are
+/ processed in ascending order starting at block 1 by default, unless the
+/ console switch register supplies an override on entry.
 / 
 / Usage:
 /   1. From the monitor, ensure magtape unit 1 is ready for a fresh record:
@@ -33,8 +32,6 @@ BLOCKNUM,   0               / Current paper tape block number
 TAPEWD,     0               / Latest word read from paper tape
 WORD_TEMP,  0               / Scratch for digit extraction
 TPCHAR,     0               / Teleprinter character buffer
-BLKLEN,     0               / Word count for current block
-
         *0020
 HEADER_LABEL0, 02024        / "PT"
 HEADER_LABEL1, 00317        / "CO"
@@ -49,7 +46,6 @@ ASCII_ZERO, 0060
 SPACE_CHAR, 0040
 CR_CHAR,    0015
 LF_CHAR,    0012
-P_COUNT_BLOCK,    COUNT_BLOCK
 P_COPY_BLOCK,     COPY_BLOCK
 P_WRITE_HEADER,   WRITE_HEADER
 P_WRITE_WORD,     WRITE_WORD
@@ -80,13 +76,8 @@ BEGIN_COPY,
         TAD BLOCKNUM
         IOT 6672            / Select current paper tape block
 
-        JMS I P_COUNT_BLOCK / Measure block length
-        SZA                 / AC = 0 when block contained data
-        JMP FINISH          / Non-zero AC -> no data available, stop
-
-        CLA CLL
-        TAD BLOCKNUM
-        IOT 6672            / Reselect block for actual copy
+        IOT 6671            / Skip when data is ready
+        JMP FINISH          / Not ready -> no further data
 
         JMS I P_WRITE_HEADER / Emit magtape header words
         JMS I P_COPY_BLOCK   / Copy data words
@@ -97,35 +88,6 @@ BEGIN_COPY,
 FINISH,
         IOT 6720            / Flush and close magtape record
         HLT
-
-/------------------------------------------------------------
-/ COUNT_BLOCK
-/   Determine number of words in the currently selected paper tape block.
-/   Returns with AC = 0 when at least one word was counted, AC = 1 otherwise.
-/------------------------------------------------------------
-COUNT_BLOCK, 0
-        CLA CLL
-        DCA BLKLEN
-
-CB_COUNT_LOOP,
-        IOT 6671            / Skip when data is ready
-        JMP CB_COUNT_DONE   / Not ready implies end of block
-        IOT 6674            / Consume word (discard content)
-        ISZ BLKLEN          / Increment length
-        JMP CB_COUNT_LOOP
-
-CB_COUNT_DONE,
-        CLA
-        TAD BLKLEN
-        SZA                 / Zero length -> treat as missing block
-        JMP CB_COUNT_OK
-        CLA CLL
-        IAC                 / AC = 1 signals no data
-        JMP I COUNT_BLOCK
-
-CB_COUNT_OK,
-        CLA CLL             / AC = 0 signals success
-        JMP I COUNT_BLOCK
 
 /------------------------------------------------------------
 / COPY_BLOCK
@@ -168,14 +130,9 @@ WRITE_WORD, 0
 
 /------------------------------------------------------------
 / WRITE_HEADER
-/   Emit length, label, and format header words for the current block.
+/   Emit label and format header words for the current block.
 /------------------------------------------------------------
 WRITE_HEADER, 0
-        CLA
-        TAD BLKLEN
-        DCA TAPEWD
-        JMS I P_WRITE_WORD
-
         CLA
         TAD HEADER_LABEL0
         DCA TAPEWD
