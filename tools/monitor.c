@@ -781,6 +781,8 @@ static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
                                                char **state);
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state);
+static enum monitor_command_status command_go(struct monitor_runtime *runtime,
+                                              char **state);
 static enum monitor_command_status command_run(struct monitor_runtime *runtime,
                                                char **state);
 static enum monitor_command_status command_save(struct monitor_runtime *runtime,
@@ -812,6 +814,11 @@ static const struct monitor_command monitor_commands[] = {
     {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
+    {"go",
+     command_go,
+     "go [addr]",
+     "Run until halt, interrupt, or '.' (optional start address).",
+     true},
     {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
     {"save", command_save, "save <file>", "Write RAM image to a file.", true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
@@ -854,6 +861,17 @@ static void print_help_listing(void) {
 }
 
 #define MONITOR_RUN_SLICE 2000u
+
+enum monitor_go_stop_reason {
+    MONITOR_GO_STOP_HALT = 0,
+    MONITOR_GO_STOP_INTERRUPT,
+    MONITOR_GO_STOP_USER,
+    MONITOR_GO_STOP_ERROR
+};
+
+static bool go_pump_keyboard(struct monitor_runtime *runtime, bool *user_break);
+static int go_run_until_event(struct monitor_runtime *runtime,
+                              enum monitor_go_stop_reason *stop_reason);
 
 static void monitor_runtime_init(struct monitor_runtime *runtime) {
     if (!runtime) {
@@ -1096,6 +1114,75 @@ static enum monitor_command_status command_continue(struct monitor_runtime *runt
                            executed,
                            pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
                            pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_go(struct monitor_runtime *runtime,
+                                              char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *addr_tok = command_next_token(state);
+    char *extra_tok = command_next_token(state);
+    if (extra_tok) {
+        monitor_console_puts("go takes at most one address argument.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (addr_tok) {
+        long addr_val = 0;
+        if (parse_number(addr_tok, &addr_val) != 0 || addr_val < 0) {
+            monitor_console_printf("Invalid start address '%s'.\n", addr_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+        if ((size_t)addr_val >= runtime->memory_words) {
+            monitor_console_printf("Start address %04lo exceeds memory size.\n", addr_val);
+            return MONITOR_COMMAND_ERROR;
+        }
+        pdp8_api_set_pc(runtime->cpu, (uint16_t)(addr_val & 0x0FFFu));
+    }
+
+    pdp8_api_clear_halt(runtime->cpu);
+
+    enum monitor_go_stop_reason stop_reason = MONITOR_GO_STOP_ERROR;
+    int executed = go_run_until_event(runtime, &stop_reason);
+    if (executed < 0 || stop_reason == MONITOR_GO_STOP_ERROR) {
+        monitor_console_puts("go failed.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    const char *reason_text = "unknown";
+    switch (stop_reason) {
+        case MONITOR_GO_STOP_HALT:
+            reason_text = "HALT";
+            break;
+        case MONITOR_GO_STOP_INTERRUPT:
+            reason_text = "interrupt pending";
+            break;
+        case MONITOR_GO_STOP_USER:
+            reason_text = "user break '.'";
+            break;
+        default:
+            reason_text = "unknown";
+            break;
+    }
+
+    uint16_t pc = pdp8_api_get_pc(runtime->cpu) & 0x0FFFu;
+    uint16_t ac = pdp8_api_get_ac(runtime->cpu) & 0x0FFFu;
+    uint8_t link = pdp8_api_get_link(runtime->cpu) & 0x1u;
+    bool halted = pdp8_api_is_halted(runtime->cpu) != 0;
+    int ion_state = pdp8_api_is_interrupt_enabled(runtime->cpu);
+    int pending = pdp8_api_peek_interrupt_pending(runtime->cpu);
+
+    monitor_console_printf("\nStopped (%s) after %d cycle(s).\n", reason_text, executed);
+    monitor_console_printf("PC=%04o AC=%04o LINK=%o HALT=%s ION=%s INT=%d\n",
+                           pc,
+                           ac,
+                           link,
+                           halted ? "yes" : "no",
+                           ion_state == 1 ? "on" : "off",
+                           pending);
     return MONITOR_COMMAND_OK;
 }
 
@@ -1469,6 +1556,103 @@ static void service_platform_keyboard(pdp8_kl8e_console_t *console) {
     while (monitor_platform_poll_keyboard(&ch)) {
         (void)pdp8_kl8e_console_queue_input(console, ch);
     }
+}
+
+static bool go_pump_keyboard(struct monitor_runtime *runtime, bool *user_break) {
+    if (user_break) {
+        *user_break = false;
+    }
+    if (!runtime || !runtime->console) {
+        return false;
+    }
+
+    bool saw_input = false;
+    bool break_requested = user_break ? *user_break : false;
+    uint8_t ch = 0;
+    while (monitor_platform_poll_keyboard(&ch)) {
+        saw_input = true;
+        if (!break_requested && ch == (uint8_t)'.') {
+            break_requested = true;
+            continue;
+        }
+        if (!break_requested) {
+            (void)pdp8_kl8e_console_queue_input(runtime->console, ch);
+        }
+    }
+    if (user_break) {
+        *user_break = break_requested;
+    }
+    return saw_input;
+}
+
+static int go_run_until_event(struct monitor_runtime *runtime,
+                              enum monitor_go_stop_reason *stop_reason) {
+    if (!runtime || !runtime->cpu) {
+        return -1;
+    }
+
+    enum monitor_go_stop_reason reason = MONITOR_GO_STOP_ERROR;
+    int total_executed = 0;
+
+    for (;;) {
+        bool user_break = false;
+        go_pump_keyboard(runtime, &user_break);
+        if (user_break) {
+            reason = MONITOR_GO_STOP_USER;
+            break;
+        }
+
+        if (pdp8_api_is_halted(runtime->cpu)) {
+            reason = MONITOR_GO_STOP_HALT;
+            break;
+        }
+
+        if (pdp8_api_peek_interrupt_pending(runtime->cpu) > 0) {
+            reason = MONITOR_GO_STOP_INTERRUPT;
+            break;
+        }
+
+        int executed = pdp8_api_run(runtime->cpu, MONITOR_RUN_SLICE);
+        if (executed <= 0) {
+            if (pdp8_api_is_halted(runtime->cpu)) {
+                reason = MONITOR_GO_STOP_HALT;
+            } else if (pdp8_api_peek_interrupt_pending(runtime->cpu) > 0) {
+                reason = MONITOR_GO_STOP_INTERRUPT;
+            } else if (user_break) {
+                reason = MONITOR_GO_STOP_USER;
+            } else {
+                reason = MONITOR_GO_STOP_ERROR;
+            }
+            break;
+        }
+
+        total_executed += executed;
+
+        if (pdp8_api_is_halted(runtime->cpu)) {
+            reason = MONITOR_GO_STOP_HALT;
+            break;
+        }
+
+        if (pdp8_api_peek_interrupt_pending(runtime->cpu) > 0) {
+            reason = MONITOR_GO_STOP_INTERRUPT;
+            break;
+        }
+
+        go_pump_keyboard(runtime, &user_break);
+        if (user_break) {
+            reason = MONITOR_GO_STOP_USER;
+            break;
+        }
+
+        monitor_platform_idle();
+    }
+
+    service_platform_keyboard(runtime->console);
+
+    if (stop_reason) {
+        *stop_reason = reason;
+    }
+    return total_executed;
 }
 
 static int run_with_console(struct monitor_runtime *runtime, size_t cycles) {
