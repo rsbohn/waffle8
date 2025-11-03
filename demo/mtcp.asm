@@ -71,6 +71,8 @@ DEFAULT_BLOCK,
         TAD FIRST_BLOCK
         DCA BLOCKNUM
 
+        JMS I P_WRITE_HEADER / Emit single magtape header at start
+
 BEGIN_COPY,
         CLA CLL
         TAD BLOCKNUM
@@ -79,7 +81,6 @@ BEGIN_COPY,
         IOT 6671            / Skip when data is ready
         JMP FINISH          / Not ready -> no further data
 
-        JMS I P_WRITE_HEADER / Emit magtape header words
         JMS I P_COPY_BLOCK   / Copy data words
 
         ISZ BLOCKNUM
