@@ -2,7 +2,7 @@ ALL: $(FACTORY_LIB) monitor tools/pdp8_bench
 
 HOST_CC ?= cc
 HOST_CFLAGS ?= -std=c11 -Wall -Wextra -pedantic
-MONITOR_OBJS = tools/monitor.c \
+MONITOR_OBJS = src/monitor.c \
         src/monitor_config.c \
         src/monitor_platform_posix.c \
 	src/emulator/main.c \
