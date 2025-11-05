@@ -14,8 +14,72 @@ with assembly programming and highlights the conventions baked into
   `string_address - 1` so the first access increments to the correct start.
 - **Instruction set:** See `docs/pdp8-opcodes-cheat-sheet.md` for a condensed
   reference to memory-reference, IOT, and operate instructions.
+- **Label addressing quirk:** In PDP-8 assembly, a label defined with storage
+  (`BUFFER, 0`) refers to the **contents** at that address when used in `TAD BUFFER`.
+  To load the **address itself**, define a constant (`BUF_ADDR, 0200`) and use
+  `TAD BUF_ADDR`. This matters when initializing autoincrement pointers or
+  computing addresses—see "Address Constants vs. Labels" below.
 
 ## Toolchain Overview
+
+### Address Constants vs. Labels
+
+A common gotcha in PDP-8 assembly is the difference between **labels with storage**
+and **address constants**. When you define a label with data:
+
+```asm
+BUFFER,  0      / Label at address 0200 with initial value 0
+```
+
+Using `TAD BUFFER` loads the **contents** of address 0200 (zero in this case),
+not the address 0200 itself. To get the address value, define a constant:
+
+```asm
+BUF_ADDR,  0200    / Constant equal to 0200
+```
+
+Then `TAD BUF_ADDR` loads the value 0200 into the accumulator.
+
+**This matters for:**
+
+1. **Initializing autoincrement pointers** (locations 0010-0017):
+   ```asm
+   TAD BUF_ADDR    / Load address 0200
+   TAD NEG1        / Subtract 1 → 0177
+   DCA PTR         / Store in autoincrement location
+   ```
+
+2. **Computing table offsets**:
+   ```asm
+   TAD TABLE_ADDR  / Load base address
+   TAD OFFSET      / Add offset
+   DCA POINTER     / Use for indirect access
+   ```
+
+3. **Passing addresses to subroutines**:
+   ```asm
+   TAD STR_ADDR    / Load string address
+   DCA PARAM       / Pass to routine
+   JMS PRINT_STR
+   ```
+
+**Rule of thumb:** If you need to work with an address arithmetically or store
+it in a pointer, define it as a constant. If you just need to read/write the
+data at that location, a label with storage is fine.
+
+**Common mistake pattern:**
+```asm
+/ WRONG - loads contents (0), not address (0200)
+TAD BUFFER
+DCA PTR
+
+/ RIGHT - loads address value
+TAD BUF_ADDR
+DCA PTR
+```
+
+The assembler won't warn you—both are syntactically valid—but the first loads
+zero while the second loads 0200.
 
 ### Build the Emulator Artifacts
 

@@ -15,12 +15,15 @@ SIXMASK,        0077
 CR,             0015
 LF,             0012
 COUNT6,         0
+UNIT1,          1
 
 WORD_TEMP,      0
 CHAR_TEMP,      0
 SIX_INDEX,      0
 TAB_PTR,        0
 CHARMAP_PTR,    CHARMAP
+HDR_ADDR,       0050
+LBL_ADDR,       0056
 
         *0050
 HEADER,         0               / Storage for 6-word header
@@ -39,12 +42,12 @@ LABEL_BUF,      0               / Storage for decoded label (6 chars)
 
         *0200
 START,  CLA CLL
-        TAD NEG1
+        TAD UNIT1
         IOT 6701                / Select unit 1 (GO)
 
         / Setup to read 6 header words into HEADER buffer
         CLA CLL
-        TAD HEADER
+        TAD HDR_ADDR
         TAD NEG1
         DCA HDR_PTR
         CLA CLL
@@ -59,11 +62,11 @@ READ_HDR,
 
         / Decode label into LABEL_BUF (first 3 words)
         CLA CLL
-        TAD HEADER
+        TAD HDR_ADDR
         TAD NEG1
         DCA HDR_PTR
         CLA CLL
-        TAD LABEL_BUF
+        TAD LBL_ADDR
         TAD NEG1
         DCA DST_PTR
         CLA CLL
@@ -79,7 +82,7 @@ DECODE_LABEL,
 
         / Print label
         CLA CLL
-        TAD LABEL_BUF
+        TAD LBL_ADDR
         TAD NEG1
         DCA STR_PTR
         CLA CLL
@@ -144,7 +147,7 @@ SIX_TO_ASCII,
         0
         DCA SIX_INDEX
         CLA
-        TAD I CHARMAP_PTR
+        TAD CHARMAP_PTR
         DCA TAB_PTR
         CLA
         TAD SIX_INDEX

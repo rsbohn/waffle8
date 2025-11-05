@@ -44,6 +44,7 @@ PAYLOAD_MSG_PTR,    PAYLOAD_MSG
 UNKNOWN_MSG_PTR,    UNKNOWN_MSG
 BAD_HEADER_MSG_PTR, BAD_HEADER_MSG
 READWORD_PTR,       READWORD
+READ_HDR_PTR,       READ_HDR
 CHARMAP_PTR,        CHARMAP
 UNIT_MSG_PTR,       UNIT_MSG
 LABEL_MSG_PTR,      LABEL_MSG
@@ -60,6 +61,7 @@ COMPARE6_PTR,       COMPARE6
 BAD_HEADER_PTR,     BAD_HEADER
 ASCII_PAYLOAD_PTR,  ASCII_PAYLOAD
 SIXBIT_PAYLOAD_PTR, SIXBIT_PAYLOAD
+VALIDATE_CODE_PTR,  VALIDATE_CODE
 
 WORD_TEMP,  0
 CHAR_TEMP,  0
@@ -88,12 +90,7 @@ START,  CLA CLL
         CLA CLL
         TAD NEG6
         DCA WORDS_LEFT
-
-READ_HDR,
-        JMS I READWORD_PTR      / Read six header words
-        DCA I HDR_PTR
-        ISZ WORDS_LEFT
-        JMP READ_HDR
+        JMS I READ_HDR_PTR
 
         / Decode label into LABEL_BUF
         CLA CLL
@@ -291,6 +288,22 @@ DONE,   HLT
 / Subroutines
 /------------------------------------------------------------
 
+        *1600
+READ_HDR,
+        0
+RH_LOOP,
+        IOT 6710                / Skip if word ready
+        JMP RH_ERROR            / No more data - bad header
+        IOT 6702                / Read word directly
+        DCA I HDR_PTR
+        ISZ WORDS_LEFT
+        JMP RH_LOOP
+        JMP I READ_HDR
+RH_ERROR,
+        ISZ HEADER_BAD          / Mark header as bad
+        JMP I READ_HDR
+
+        *0500
 READWORD,
         0
 RD_WAIT,
@@ -299,14 +312,14 @@ RD_WAIT,
         IOT 6702                / Read word into AC
         JMP I READWORD
 
-        *0400
+        *0520
 STORE_PAIR,
         0
         DCA WORD_TEMP
         CLA
         TAD WORD_TEMP
         JMS I SHIFT_RIGHT6_PTR
-        JMS VALIDATE_CODE
+        JMS I VALIDATE_CODE_PTR
         JMS I SIX_TO_ASCII_PTR
         DCA CHAR_TEMP
         CLA
@@ -315,7 +328,7 @@ STORE_PAIR,
         CLA
         TAD WORD_TEMP
         AND SIXMASK
-        JMS VALIDATE_CODE
+        JMS I VALIDATE_CODE_PTR
         JMS I SIX_TO_ASCII_PTR
         DCA CHAR_TEMP
         CLA
@@ -339,6 +352,130 @@ SHIFT_RIGHT6,
         RAR
         AND SIXMASK
         JMP I SHIFT_RIGHT6
+
+SIX_TO_ASCII,
+        0
+        DCA SIX_INDEX
+        CLA
+        TAD CHARMAP_PTR
+        DCA TAB_PTR
+        CLA
+        TAD SIX_INDEX
+        TAD TAB_PTR
+        DCA TAB_PTR
+        CLA
+        TAD I TAB_PTR
+        JMP I SIX_TO_ASCII
+
+PRINT_STR,
+        0
+PS_LOOP,
+        CLA
+        TAD I STR_PTR
+        SZA
+        JMP PS_CONT
+        JMP I PRINT_STR
+PS_CONT,
+        JMS I PUTCHR_PTR
+        JMP PS_LOOP
+
+PRINT_FIXED,
+        0
+PF_LOOP,
+        CLA
+        TAD I STR_PTR
+        JMS I PUTCHR_PTR
+        ISZ COUNT6
+        JMP PF_LOOP
+        JMP I PRINT_FIXED
+
+PRINT_CRLF,
+        0
+        CLA
+        TAD CR
+        JMS I PUTCHR_PTR
+        CLA
+        TAD LF
+        JMS I PUTCHR_PTR
+        JMP I PRINT_CRLF
+
+        *0640
+PUTCHR,
+        0
+        DCA CHAR_TEMP
+LP_WAIT,
+        IOT 6601                / Skip if line printer ready
+        JMP LP_WAIT
+        CLA
+        TAD CHAR_TEMP
+        IOT 6606                / Clear flag and print character
+        JMP I PUTCHR
+
+        *1200
+COMPARE6,
+        0
+        CLA CLL
+        TAD NEG6
+        DCA COUNT6
+CMP6_LOOP,
+        CLA
+        TAD I STR_PTR
+        DCA CHAR_TEMP
+        CLA
+        TAD I CMP_PTR
+        DCA WORD_TEMP
+        CLA
+        TAD CHAR_TEMP
+        CMA
+        IAC
+        TAD WORD_TEMP
+        SZA
+        JMP CMP6_NE
+        ISZ COUNT6
+        JMP CMP6_LOOP
+        CLA
+        JMP I COMPARE6
+
+CMP6_NE,
+        CLA
+        IAC
+        JMP I COMPARE6
+
+ASCII_PAYLOAD,
+        0
+ASCII_LOOP,
+        IOT 6710                / Skip if word ready
+        JMP ASCII_DONE
+        IOT 6702                / Read word directly
+        AND ASCII_MASK
+        DCA CHAR_TEMP
+        CLA
+        TAD CHAR_TEMP
+        JMS I PUTCHR_PTR
+        JMP ASCII_LOOP
+ASCII_DONE,
+        JMP I ASCII_PAYLOAD
+
+SIXBIT_PAYLOAD,
+        0
+SIX_LOOP,
+        IOT 6710                / Skip if word ready
+        JMP SIX_DONE
+        IOT 6702                / Read word directly
+        DCA WORD_TEMP
+        CLA
+        TAD WORD_TEMP
+        JMS I SHIFT_RIGHT6_PTR
+        JMS I SIX_TO_ASCII_PTR
+        JMS I PUTCHR_PTR
+        CLA
+        TAD WORD_TEMP
+        AND SIXMASK
+        JMS I SIX_TO_ASCII_PTR
+        JMS I PUTCHR_PTR
+        JMP SIX_LOOP
+SIX_DONE,
+        JMP I SIXBIT_PAYLOAD
 
 VALIDATE_CODE,
         0
@@ -389,130 +526,7 @@ VC_BAD,
         TAD SIX_INDEX
         JMP I VALIDATE_CODE
 
-SIX_TO_ASCII,
-        0
-        DCA SIX_INDEX
-        CLA
-        TAD CHARMAP_PTR
-        DCA TAB_PTR
-        CLA
-        TAD SIX_INDEX
-        TAD TAB_PTR
-        DCA TAB_PTR
-        CLA
-        TAD I TAB_PTR
-        JMP I SIX_TO_ASCII
-
-PRINT_STR,
-        0
-PS_LOOP,
-        CLA
-        TAD I STR_PTR
-        SZA
-        JMP PS_CONT
-        JMP I PRINT_STR
-PS_CONT,
-        JMS I PUTCHR_PTR
-        JMP PS_LOOP
-
-PRINT_FIXED,
-        0
-PF_LOOP,
-        CLA
-        TAD I STR_PTR
-        JMS I PUTCHR_PTR
-        ISZ COUNT6
-        JMP PF_LOOP
-        JMP I PRINT_FIXED
-
-PRINT_CRLF,
-        0
-        CLA
-        TAD CR
-        JMS I PUTCHR_PTR
-        CLA
-        TAD LF
-        JMS I PUTCHR_PTR
-        JMP I PRINT_CRLF
-
-PUTCHR,
-        0
-        DCA CHAR_TEMP
-LP_WAIT,
-        IOT 6601                / Skip if line printer ready
-        JMP LP_WAIT
-        CLA
-        TAD CHAR_TEMP
-        IOT 6606                / Clear flag and print character
-        JMP I PUTCHR
-
-        *0500
-COMPARE6,
-        0
-        CLA CLL
-        TAD NEG6
-        DCA COUNT6
-CMP6_LOOP,
-        CLA
-        TAD I STR_PTR
-        DCA CHAR_TEMP
-        CLA
-        TAD I CMP_PTR
-        DCA WORD_TEMP
-        CLA
-        TAD CHAR_TEMP
-        CMA
-        IAC
-        TAD WORD_TEMP
-        SZA
-        JMP CMP6_NE
-        ISZ COUNT6
-        JMP CMP6_LOOP
-        CLA
-        JMP I COMPARE6
-
-CMP6_NE,
-        CLA
-        IAC
-        JMP I COMPARE6
-
-ASCII_PAYLOAD,
-        0
-ASCII_LOOP,
-        IOT 6710
-        JMP ASCII_DONE
-        JMS I READWORD_PTR
-        AND ASCII_MASK
-        DCA CHAR_TEMP
-        CLA
-        TAD CHAR_TEMP
-        JMS I PUTCHR_PTR
-        JMP ASCII_LOOP
-ASCII_DONE,
-        JMP I ASCII_PAYLOAD
-
-SIXBIT_PAYLOAD,
-        0
-SIX_LOOP,
-        IOT 6710
-        JMP SIX_DONE
-        JMS I READWORD_PTR
-        DCA WORD_TEMP
-        CLA
-        TAD WORD_TEMP
-        JMS I SHIFT_RIGHT6_PTR
-        JMS I SIX_TO_ASCII_PTR
-        JMS I PUTCHR_PTR
-        CLA
-        TAD WORD_TEMP
-        AND SIXMASK
-        JMS I SIX_TO_ASCII_PTR
-        JMS I PUTCHR_PTR
-        JMP SIX_LOOP
-SIX_DONE,
-        JMP I SIXBIT_PAYLOAD
-
-        *0600
+        *1400
 TITLE_MSG,
         0115    / M
         0101    / A
