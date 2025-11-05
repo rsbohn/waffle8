@@ -281,6 +281,7 @@ BAD_HEADER,
         DCA STR_PTR
         JMS I PRINT_STR_PTR
         JMS I PRINT_CRLF_PTR
+        JMP DONE
 
 DONE,   HLT
 
@@ -353,6 +354,7 @@ SHIFT_RIGHT6,
         AND SIXMASK
         JMP I SHIFT_RIGHT6
 
+        *0120
 SIX_TO_ASCII,
         0
         DCA SIX_INDEX
