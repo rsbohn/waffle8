@@ -33,6 +33,9 @@ WORDS_LEFT, 0
 SIXMASK,    0077
 CR,         0015
 LF,         0012
+SPACE,      0040
+LBRACKET,   0133
+RBRACKET,   0135
 DIGIT_BASE, 0060
 
 HEADER_ADDR,        HEADER
@@ -40,21 +43,25 @@ LABEL_ADDR,         LABEL_BUF
 FORMAT_ADDR,        FORMAT_BUF
 ASCII_TAG_ADDR,     ASCII_TAG
 SIXBIT_TAG_ADDR,    SIXBIT_TAG
+ASCII_DESC_ADDR,    ASCII_DESC
+SIXBIT_DESC_ADDR,   SIXBIT_DESC
+UNKNOWN_DESC_ADDR,  UNKNOWN_DESC
+MAG_PREFIX_PTR,     MAG_PREFIX
 PAYLOAD_MSG_PTR,    PAYLOAD_MSG
 UNKNOWN_MSG_PTR,    UNKNOWN_MSG
 BAD_HEADER_MSG_PTR, BAD_HEADER_MSG
 READWORD_PTR,       READWORD
 READ_HDR_PTR,       READ_HDR
 CHARMAP_PTR,        CHARMAP
-UNIT_MSG_PTR,       UNIT_MSG
-LABEL_MSG_PTR,      LABEL_MSG
-FORMAT_MSG_PTR,     FORMAT_MSG
-TITLE_MSG_PTR,      TITLE_MSG
 STORE_PAIR_PTR,     STORE_PAIR
 SHIFT_RIGHT6_PTR,   SHIFT_RIGHT6
 PRINT_STR_PTR,      PRINT_STR
 PRINT_FIXED_PTR,    PRINT_FIXED
 PRINT_CRLF_PTR,     PRINT_CRLF
+PRINT_DESC_ASCII_PTR,   PRINT_DESC_ASCII
+PRINT_DESC_SIXBIT_PTR,  PRINT_DESC_SIXBIT
+PRINT_DESC_UNKNOWN_PTR, PRINT_DESC_UNKNOWN
+PRINT_DESC_CLOSE_PTR,   PRINT_DESC_CLOSE
 SIX_TO_ASCII_PTR,   SIX_TO_ASCII
 PUTCHR_PTR,         PUTCHR
 COMPARE6_PTR,       COMPARE6
@@ -185,30 +192,22 @@ FORMAT_CHOICE_DONE,
         SZA
         JMP I BAD_HEADER_PTR
 
-        / Print header information
+        / Print header information as "MAG<unit> <label> [<type>]"
         CLA CLL
-        TAD TITLE_MSG_PTR
+        TAD MAG_PREFIX_PTR
         TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
-        JMS I PRINT_CRLF_PTR
 
-        CLA CLL
-        TAD UNIT_MSG_PTR
-        TAD NEG1
-        DCA STR_PTR
-        JMS I PRINT_STR_PTR
         CLA
         TAD UNIT_NUM
         TAD DIGIT_BASE
         JMS I PUTCHR_PTR
-        JMS I PRINT_CRLF_PTR
 
-        CLA CLL
-        TAD LABEL_MSG_PTR
-        TAD NEG1
-        DCA STR_PTR
-        JMS I PRINT_STR_PTR
+        CLA
+        TAD SPACE
+        JMS I PUTCHR_PTR
+
         CLA CLL
         TAD LABEL_ADDR
         TAD NEG1
@@ -217,21 +216,75 @@ FORMAT_CHOICE_DONE,
         TAD NEG6
         DCA COUNT6
         JMS I PRINT_FIXED_PTR
-        JMS I PRINT_CRLF_PTR
 
+        CLA
+        TAD SPACE
+        JMS I PUTCHR_PTR
+
+        CLA
+        TAD LBRACKET
+        JMS I PUTCHR_PTR
+
+        CLA
+        TAD FORMAT_KIND
+        SZA
+        JMP SELECT_ASCII_DESC
+        JMS I PRINT_DESC_UNKNOWN_PTR
+        JMP I PRINT_DESC_CLOSE_PTR
+
+SELECT_ASCII_DESC,
+        CLA
+        TAD FORMAT_KIND
+        TAD NEG1
+        SZA
+        JMP SELECT_SIXBIT_DESC
+        JMS I PRINT_DESC_ASCII_PTR
+        JMP I PRINT_DESC_CLOSE_PTR
+
+SELECT_SIXBIT_DESC,
+        CLA
+        TAD FORMAT_KIND
+        TAD NEG2
+        SZA
+        JMP SELECT_DESC_FALLBACK
+        JMS I PRINT_DESC_SIXBIT_PTR
+        JMP I PRINT_DESC_CLOSE_PTR
+
+SELECT_DESC_FALLBACK,
+        JMS I PRINT_DESC_UNKNOWN_PTR
+        JMP I PRINT_DESC_CLOSE_PTR
+
+PRINT_DESC_ASCII,
+        0
         CLA CLL
-        TAD FORMAT_MSG_PTR
+        TAD ASCII_DESC_ADDR
         TAD NEG1
         DCA STR_PTR
         JMS I PRINT_STR_PTR
+        JMP I PRINT_DESC_ASCII
+
+PRINT_DESC_SIXBIT,
+        0
         CLA CLL
-        TAD FORMAT_ADDR
+        TAD SIXBIT_DESC_ADDR
         TAD NEG1
         DCA STR_PTR
+        JMS I PRINT_STR_PTR
+        JMP I PRINT_DESC_SIXBIT
+
+PRINT_DESC_UNKNOWN,
+        0
         CLA CLL
-        TAD NEG6
-        DCA COUNT6
-        JMS I PRINT_FIXED_PTR
+        TAD UNKNOWN_DESC_ADDR
+        TAD NEG1
+        DCA STR_PTR
+        JMS I PRINT_STR_PTR
+        JMP I PRINT_DESC_UNKNOWN
+
+PRINT_DESC_CLOSE,
+        CLA
+        TAD RBRACKET
+        JMS I PUTCHR_PTR
         JMS I PRINT_CRLF_PTR
 
         CLA CLL
@@ -244,8 +297,10 @@ FORMAT_CHOICE_DONE,
         CLA
         TAD FORMAT_KIND
         SZA
-        JMP UNKNOWN_FORMAT_MSG  / FORMAT_KIND == 0 -> unknown
+        JMP FORMAT_DISPATCH
+        JMP UNKNOWN_FORMAT_MSG
 
+FORMAT_DISPATCH,
         CLA
         TAD FORMAT_KIND
         TAD NEG1
@@ -529,54 +584,6 @@ VC_BAD,
         JMP I VALIDATE_CODE
 
         *1400
-TITLE_MSG,
-        0115    / M
-        0101    / A
-        0107    / G
-        0124    / T
-        0101    / A
-        0120    / P
-        0105    / E
-        0040    / space
-        0122    / R
-        0105    / E
-        0103    / C
-        0117    / O
-        0122    / R
-        0104    / D
-        0
-
-UNIT_MSG,
-        0125    / U
-        0116    / N
-        0111    / I
-        0124    / T
-        0040    /  
-        0072    / :
-        0040    /  
-        0
-
-LABEL_MSG,
-        0114    / L
-        0101    / A
-        0102    / B
-        0105    / E
-        0114    / L
-        0072    / :
-        0040    /  
-        0
-
-FORMAT_MSG,
-        0106    / F
-        0117    / O
-        0122    / R
-        0115    / M
-        0101    / A
-        0124    / T
-        0072    / :
-        0040    /  
-        0
-
 PAYLOAD_MSG,
         0120    / P
         0101    / A
@@ -634,6 +641,39 @@ SIXBIT_TAG,
         0102    / B
         0111    / I
         0124    / T
+
+ASCII_DESC,
+        0101    / A
+        0123    / S
+        0103    / C
+        0111    / I
+        0111    / I
+        0
+
+SIXBIT_DESC,
+        0123    / S
+        0111    / I
+        0130    / X
+        0102    / B
+        0111    / I
+        0124    / T
+        0
+
+UNKNOWN_DESC,
+        0125    / U
+        0116    / N
+        0113    / K
+        0116    / N
+        0117    / O
+        0127    / W
+        0116    / N
+        0
+
+MAG_PREFIX,
+        0115    / M
+        0101    / A
+        0107    / G
+        0
 
         *0700
 HEADER,
