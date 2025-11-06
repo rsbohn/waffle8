@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,6 +8,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
@@ -52,6 +55,37 @@
             return 0;                                                                                  \
         }                                                                                              \
     } while (0)
+
+static uint16_t minutes_from_time(time_t value) {
+    if (value == (time_t)-1) {
+        return 0u;
+    }
+    struct tm tm_buf;
+    struct tm *local = localtime_r(&value, &tm_buf);
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+    if (!local) {
+        local = localtime(&value);
+    }
+#endif
+    if (!local) {
+        return 0u;
+    }
+    int minutes = local->tm_hour * 60 + local->tm_min;
+    return (uint16_t)(minutes & 0x0FFFu);
+}
+
+static bool minute_matches(uint16_t observed, time_t before, time_t after) {
+    uint16_t before_minutes = minutes_from_time(before);
+    uint16_t after_minutes = minutes_from_time(after);
+    if (observed == before_minutes || observed == after_minutes) {
+        return true;
+    }
+    /* Handle rare rollover where before is 23:59 and after is 00:00 but observed captured between */
+    if ((before_minutes == 1439u && observed == 0u) || (after_minutes == 0u && observed == 1439u)) {
+        return true;
+    }
+    return false;
+}
 
 static int load_srec_into_cpu(pdp8_t *cpu,
                               const char *path,
@@ -292,9 +326,9 @@ static int test_memory_reference(void) {
 
 static int test_indirect_and_auto_increment(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
-    if (!cpu) {
-        return 0;
-    }
+   if (!cpu) {
+       return 0;
+   }
 
     pdp8_api_write_mem(cpu, 0000, 01010 | 00400); /* TAD I 0010 */
     pdp8_api_write_mem(cpu, 0001, 07402);
@@ -305,6 +339,35 @@ static int test_indirect_and_auto_increment(void) {
     pdp8_api_step(cpu);
     ASSERT_EQ("Indirect fetch", 00005, pdp8_api_get_ac(cpu));
     ASSERT_EQ("Auto-increment", 00021, pdp8_api_read_mem(cpu, 0010));
+
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_wall_clock_device(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    time_t before = time(NULL);
+    uint16_t direct_value = pdp8_api_read_mem(cpu, 07760);
+    time_t after = time(NULL);
+    ASSERT_TRUE("wall clock API read matches host minutes",
+                minute_matches(direct_value, before, after));
+
+    pdp8_api_write_mem(cpu, 0000, 01020 | 00400); /* TAD I 0020 */
+    pdp8_api_write_mem(cpu, 0001, 07402);         /* HLT */
+    pdp8_api_write_mem(cpu, 0020, 07760);         /* pointer to wall clock */
+    pdp8_api_set_ac(cpu, 0);
+    pdp8_api_set_pc(cpu, 0);
+
+    time_t before_exec = time(NULL);
+    ASSERT_INT_EQ("execute TAD I wall clock", 1, pdp8_api_step(cpu));
+    uint16_t ac_value = pdp8_api_get_ac(cpu);
+    time_t after_exec = time(NULL);
+    ASSERT_TRUE("wall clock read via instruction matches host minutes",
+                minute_matches(ac_value, before_exec, after_exec));
 
     pdp8_api_destroy(cpu);
     return 1;
@@ -972,6 +1035,7 @@ int main(int argc, char **argv) {
     } tests[] = {
         {"memory reference", test_memory_reference},
         {"indirect", test_indirect_and_auto_increment},
+        {"wall clock", test_wall_clock_device},
         {"operate group 1", test_operate_group1},
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},

@@ -9,6 +9,9 @@ with assembly programming and highlights the conventions baked into
 
 - **Word size:** 12-bit words, octal notation everywhere (`0oXXXX` implied).
 - **Memory map:** 4K words per field; the core ROM occupies addresses `6700–7777`.
+- **Wall clock:** Reading memory address `07760` yields the host's minutes-since-midnight
+  (local time, masked to 12 bits). Treat it as read-only; writes have no effect on
+  the reported value.
 - **Auto-increment registers:** Locations `0010–0017` **pre-increment** automatically
   when used indirectly. For string processing, initialize the pointer to 
   `string_address - 1` so the first access increments to the correct start.
