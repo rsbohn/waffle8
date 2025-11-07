@@ -6,21 +6,7 @@
 		0200
 
 		* 0200
-		CLA CLL
-		TAD I PRTC
-		DCA TIME_NOW
-		TAD TIME_NOW
-		JMS DIV10
-		JMS DIV3
-		JMS DIV2
-		DCA HOURS
-		TAD TIME_NOW
-		JMS MOD60
-		DCA MINS
-
-		HLT
-/ OR
-		CLA CLL		/ alternate
+		CLA CLL		/ main: HOURS := NOW div5 div3 div2 div2, MINS := NOW mod60
 		TAD I PRTC
 		DCA TIME_NOW
 		TAD TIME_NOW
@@ -97,4 +83,61 @@ M60,		07704
 P60,		00074
 	
 		
+		///// Printing
+		*0400
+PRINT,		0
+		/ HH : MM (octal)
+		CLL CLA
+		TAD I _HOURS
+		JMS PRD2
+		JMS PRCOLON
+		CLL CLA
+		TAD I _MINS
+		JMS PRD2
+		JMS PRCR
+		JMP I PRINT
+
+MARKER,		5555
+		2222
+_HOURS,		HOURS
+_MINS,		MINS
+PRTEM,		0000	/ scratchpad
+PRMASK,		0007	/ mask a single digit
+CR,		0012	/ carriage return
+AZERO,		"0"	/ ASCII ZERO
+COLON,		":"
+
+PRD2,		0	/ Print 2 digits
+		DCA PRTEM
+		TAD PRTEM
+		CLL RAR		/ DIV8
+		CLL RAR
+		CLL RAR
+		AND PRMASK	/ Just the lowest three bits
+		TAD AZERO	/ 0-7 ascii
+		JMS PUTCH
+		CLA CLL
+		TAD PRTEM
+		AND PRMASK
+		TAD AZERO
+		JMS PUTCH
+		JMP I PRD2
+
+PRCOLON,	0		/ PRCOLON
+		CLA CLL
+		TAD COLON
+		JMS PUTCH
+		JMP I PRCOLON
+
+PRCR,		0		/ PRCR carriage return
+		CLA CLL
+		TAD CR
+		JMS PUTCH
+		JMP I PRCR
+
+PUTCH,		0		/ PUTCH
+PUTCH0,		IOT 6601	/ wait for ready
+		JMP PUTCH0
+		IOT 6606	/ print
+		JMP I PUTCH
 		
