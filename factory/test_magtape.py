@@ -28,6 +28,10 @@ MAGTAPE_STATUS_EOR = 0x0004
 MAGTAPE_STATUS_EOT = 0x0008
 MAGTAPE_STATUS_WRITE_PROTECT = 0x0010
 
+HEADER_FIELD_LENGTH = 6
+TEST_HEADER_LABEL = "TEST__"
+TEST_HEADER_FORMAT = "BINARY"
+
 
 class MagtapeUnitParams(ctypes.Structure):
     _fields_ = [
@@ -56,6 +60,56 @@ class MagtapeUnitStatus(ctypes.Structure):
     ]
 
 
+def _char_to_sixbit(value: str) -> int:
+    """Convert a character to DEC SIXBIT, treating '_' as a visual space."""
+    if not value:
+        raise ValueError("Empty character input for SIXBIT conversion.")
+    ch = value.upper()
+    if ch in {" ", "_"}:
+        return 0
+    if "A" <= ch <= "Z":
+        return ord(ch) - 64
+    if "0" <= ch <= "9":
+        return ord(ch) - ord("0") + 32
+    lookup = {
+        "!": 42,
+        ",": 43,
+        "-": 44,
+        ".": 45,
+        "'": 46,
+        ":": 47,
+        ";": 48,
+        "?": 49,
+    }
+    if ch in lookup:
+        return lookup[ch]
+    raise ValueError(f"Unsupported SIXBIT character: {value!r}")
+
+
+def _normalize_header_field(text: str) -> str:
+    """Uppercase, truncate, and pad a header field to six characters."""
+    return (text or "").upper()[:HEADER_FIELD_LENGTH].ljust(HEADER_FIELD_LENGTH)
+
+
+def _encode_sixbit_field(text: str) -> list[int]:
+    normalized = _normalize_header_field(text)
+    codes = [_char_to_sixbit(ch) for ch in normalized]
+    words: list[int] = []
+    for idx in range(0, HEADER_FIELD_LENGTH, 2):
+        high = codes[idx] & 0x3F
+        low = codes[idx + 1] & 0x3F
+        words.append(((high << 6) | low) & 0x0FFF)
+    return words
+
+
+def _build_test_header_words() -> list[int]:
+    """Return the header words for TEST__/BINARY."""
+    return _encode_sixbit_field(TEST_HEADER_LABEL) + _encode_sixbit_field(TEST_HEADER_FORMAT)
+
+
+def _encode_ascii_payload(text: str) -> list[int]:
+    return [ord(ch) & 0x0FFF for ch in text]
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Test magtape device functionality.")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -72,6 +126,10 @@ def parse_args() -> argparse.Namespace:
 
     # Write subcommand
     subparsers.add_parser("write", help="Test IOT 6704 to append a record on magtape unit 1")
+    subparsers.add_parser(
+        "write-many",
+        help="Create three TEST__/BINARY records on the test reel and list its contents",
+    )
 
     return parser.parse_args()
 
@@ -171,6 +229,18 @@ def execute_iot(lib: ctypes.CDLL, cpu: int, instruction: int, ac: int | None = N
 def sense_status(lib: ctypes.CDLL, cpu: int) -> int:
     """Execute IOT 6740 and return the raw 12-bit status word."""
     return execute_iot(lib, cpu, MAGTAPE_INSTR_SENSE)
+
+
+def _write_words_to_unit(lib: ctypes.CDLL, cpu: int, unit: int, words: list[int]) -> None:
+    """Write the provided 12-bit words to the selected unit via IOT 6704."""
+    execute_iot(lib, cpu, MAGTAPE_INSTR_GO, ac=unit)
+    for word in words:
+        execute_iot(lib, cpu, MAGTAPE_INSTR_WRITE, ac=word & 0x0FFF)
+        status_word = sense_status(lib, cpu)
+        if status_word & MAGTAPE_STATUS_ERROR:
+            raise RuntimeError("Unit reported an error while writing.")
+        if status_word & MAGTAPE_STATUS_EOT:
+            raise RuntimeError("Unexpected end-of-tape while writing.")
 
 
 def seek_next_record(
@@ -374,7 +444,18 @@ def _load_tap_words(path: Path) -> tuple[int, list[int]]:
             if len(data) != 2:
                 raise RuntimeError(f"{path} ended unexpectedly.")
             words.append(int.from_bytes(data, "little") & 0x0FFF)
+        sentinel = fp.read(2)
+        if len(sentinel) != 2:
+            raise RuntimeError(f"{path} is missing the sentinel word.")
+        if int.from_bytes(sentinel, "little") != 0xFFFF:
+            raise RuntimeError(f"{path} does not end with the sentinel word.")
         return length, words
+
+
+def _assert_header(words: list[int], expected_header: list[int], path: Path) -> None:
+    if words[: len(expected_header)] != expected_header:
+        raise RuntimeError(f"{path.name} does not start with the expected TEST__/BINARY header.")
+
 
 
 def test_write_record(
@@ -425,6 +506,54 @@ def test_write_record(
     latest.unlink()
     print("  (record file removed after verification)")
 
+
+def write_many_records(
+    lib: ctypes.CDLL,
+    cpu: int,
+    device: int,
+    reel_path: Path,
+    unit: int = 1,
+) -> None:
+    """Create three TEST__/BINARY records on the provided reel and list its contents."""
+
+    header_words = _build_test_header_words()
+    payloads = [
+        _encode_ascii_payload("TEST REEL ENTRY 1\n"),
+        _encode_ascii_payload("TEST REEL ENTRY 2\n"),
+        _encode_ascii_payload("TEST REEL ENTRY 3\n"),
+    ]
+
+    reel_path.mkdir(parents=True, exist_ok=True)
+    before_files = {p.resolve() for p in reel_path.glob("*.tap")}
+
+    for index, payload in enumerate(payloads, start=1):
+        if lib.pdp8_magtape_device_force_new_record(device, ctypes.c_uint(unit)) != 0:
+            raise RuntimeError(f"Unable to start record {index} on unit {unit}.")
+        _write_words_to_unit(lib, cpu, unit, header_words + payload)
+        if lib.pdp8_magtape_device_force_new_record(device, ctypes.c_uint(unit)) != 0:
+            raise RuntimeError(f"Failed to finalize record {index} on unit {unit}.")
+
+    after_files = {p.resolve() for p in reel_path.glob("*.tap")}
+    new_files = sorted(after_files - before_files)
+    if len(new_files) < len(payloads):
+        raise RuntimeError(
+            f"Expected {len(payloads)} new record(s), but only found {len(new_files)} on {reel_path}."
+        )
+
+    for path in new_files[: len(payloads)]:
+        length, words = _load_tap_words(path)
+        _assert_header(words, header_words, path)
+        payload_length = length - len(header_words)
+        print(f"Created {path.name}: total_words={length} payload_words={payload_length}")
+
+    print(f"\nRecords on reel '{reel_path.name}':")
+    reel_listing = sorted(reel_path.glob("*.tap"))
+    if not reel_listing:
+        print("  (no records found)")
+    else:
+        for candidate in reel_listing:
+            print(f"  {candidate.name}")
+
 def main() -> int:
     args = parse_args()
 
@@ -466,10 +595,14 @@ def main() -> int:
             print("Failed to configure magtape unit 0.", file=sys.stderr)
             return 1
 
-        if args.command == "write":
+        write_reel_path: Path | None = None
+        if args.command in {"write", "write-many"}:
+            write_reel_path = (magtape_path / "test").resolve() if args.command == "write-many" else magtape_path
+            if args.command == "write-many":
+                write_reel_path.mkdir(parents=True, exist_ok=True)
             params = MagtapeUnitParams()
             params.unit_number = 1
-            params.path = str(magtape_path).encode("utf-8")
+            params.path = str(write_reel_path).encode("utf-8")
             params.write_protected = False
             if lib.pdp8_magtape_device_configure_unit(device, ctypes.byref(params)) != 0:
                 print("Failed to configure magtape unit 1.", file=sys.stderr)
@@ -502,10 +635,22 @@ def main() -> int:
 
         if args.command == "write":
             try:
-                test_write_record(lib, cpu, device, magtape_path, 1)
+                if write_reel_path is None:
+                    raise RuntimeError("Write reel path not initialized.")
+                test_write_record(lib, cpu, device, write_reel_path, 1)
                 return 0
             except RuntimeError as exc:
                 print(f"Write test failed: {exc}", file=sys.stderr)
+                return 1
+
+        if args.command == "write-many":
+            try:
+                if write_reel_path is None:
+                    raise RuntimeError("Write reel path not initialized.")
+                write_many_records(lib, cpu, device, write_reel_path, 1)
+                return 0
+            except RuntimeError as exc:
+                print(f"Write-many test failed: {exc}", file=sys.stderr)
                 return 1
 
         # Must be seek command

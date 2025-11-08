@@ -16,15 +16,23 @@ DST_PTR,    0
 CMP_PTR,    0
 
         *0020                   / Zero-page workspace and constants
-NEG6,       -6
-NEG3,       -3
-NEG2,       -2
-NEG1,       -1
-NEG30,      -30
-NEG31,      -31
-NEG32,      -32
-NEG50,      -50
+NEG6,       07772             / -6
+NEG3,       07775             / -3
+NEG2,       07776             / -2
+NEG1,       07777             / -1
+NEG8,       07770             / -8
+NEG30,      07750             / -30
+NEG31,      07747             / -31
+NEG32,      07746             / -32
+NEG50,      07730             / -50
+NEG1000,    07000             / -01000
+NEG0100,    07700             / -0100
+NEG0010,    07770             / -0010
 UNIT_MASK,  0007
+OCT_MASK0,  07000
+OCT_MASK1,  00700
+OCT_MASK2,  00070
+OCT_MASK3,  00007
 ASCII_MASK, 0177
 HEADER_BAD, 0
 FORMAT_KIND,0
@@ -42,8 +50,10 @@ HEADER_ADDR,        HEADER
 LABEL_ADDR,         LABEL_BUF
 FORMAT_ADDR,        FORMAT_BUF
 ASCII_TAG_ADDR,     ASCII_TAG
+BINARY_TAG_ADDR,    BINARY_TAG
 SIXBIT_TAG_ADDR,    SIXBIT_TAG
 ASCII_DESC_ADDR,    ASCII_DESC
+BINARY_DESC_ADDR,   BINARY_DESC
 SIXBIT_DESC_ADDR,   SIXBIT_DESC
 UNKNOWN_DESC_ADDR,  UNKNOWN_DESC
 MAG_PREFIX_PTR,     MAG_PREFIX
@@ -55,10 +65,12 @@ READ_HDR_PTR,       READ_HDR
 CHARMAP_PTR,        CHARMAP
 STORE_PAIR_PTR,     STORE_PAIR
 SHIFT_RIGHT6_PTR,   SHIFT_RIGHT6
+PRINT_WORD_OCT_PTR, PRINT_WORD_OCT
 PRINT_STR_PTR,      PRINT_STR
 PRINT_FIXED_PTR,    PRINT_FIXED
 PRINT_CRLF_PTR,     PRINT_CRLF
 PRINT_DESC_ASCII_PTR,   PRINT_DESC_ASCII
+PRINT_DESC_BINARY_PTR,  PRINT_DESC_BINARY
 PRINT_DESC_SIXBIT_PTR,  PRINT_DESC_SIXBIT
 PRINT_DESC_UNKNOWN_PTR, PRINT_DESC_UNKNOWN
 PRINT_DESC_CLOSE_PTR,   PRINT_DESC_CLOSE
@@ -67,6 +79,7 @@ PUTCHR_PTR,         PUTCHR
 COMPARE6_PTR,       COMPARE6
 BAD_HEADER_PTR,     BAD_HEADER
 ASCII_PAYLOAD_PTR,  ASCII_PAYLOAD
+BINARY_PAYLOAD_PTR, BINARY_PAYLOAD
 SIXBIT_PAYLOAD_PTR, SIXBIT_PAYLOAD
 VALIDATE_CODE_PTR,  VALIDATE_CODE
 
@@ -75,6 +88,9 @@ CHAR_TEMP,  0
 SIX_INDEX,  0
 TAB_PTR,    0
 COUNT6,     0
+BIN_WORD_COUNT, 0
+OCT_WORK,   0
+OCT_DIGIT,  0
 
         *0200
 START,  CLA CLL
@@ -163,9 +179,28 @@ DECODE_FORMAT,
         DCA CMP_PTR
         JMS I COMPARE6_PTR
         SZA
-        JMP CHECK_SIXBIT
+        JMP CHECK_BINARY
         CLA
         IAC                     / FORMAT_KIND = 1 (ASCII)
+        DCA FORMAT_KIND
+        JMP FORMAT_CHOICE_DONE
+
+CHECK_BINARY,
+        CLA CLL
+        TAD FORMAT_ADDR
+        TAD NEG1
+        DCA STR_PTR
+        CLA CLL
+        TAD BINARY_TAG_ADDR
+        TAD NEG1
+        DCA CMP_PTR
+        JMS I COMPARE6_PTR
+        SZA
+        JMP CHECK_SIXBIT
+        CLA
+        IAC
+        IAC
+        IAC                     / FORMAT_KIND = 3 (BINARY)
         DCA FORMAT_KIND
         JMP FORMAT_CHOICE_DONE
 
@@ -237,8 +272,17 @@ SELECT_ASCII_DESC,
         TAD FORMAT_KIND
         TAD NEG1
         SZA
-        JMP SELECT_SIXBIT_DESC
+        JMP SELECT_BINARY_DESC
         JMS I PRINT_DESC_ASCII_PTR
+        JMP I PRINT_DESC_CLOSE_PTR
+
+SELECT_BINARY_DESC,
+        CLA
+        TAD FORMAT_KIND
+        TAD NEG3
+        SZA
+        JMP SELECT_SIXBIT_DESC
+        JMS I PRINT_DESC_BINARY_PTR
         JMP I PRINT_DESC_CLOSE_PTR
 
 SELECT_SIXBIT_DESC,
@@ -262,6 +306,15 @@ PRINT_DESC_ASCII,
         DCA STR_PTR
         JMS I PRINT_STR_PTR
         JMP I PRINT_DESC_ASCII
+
+PRINT_DESC_BINARY,
+        0
+        CLA CLL
+        TAD BINARY_DESC_ADDR
+        TAD NEG1
+        DCA STR_PTR
+        JMS I PRINT_STR_PTR
+        JMP I PRINT_DESC_BINARY
 
 PRINT_DESC_SIXBIT,
         0
@@ -305,8 +358,18 @@ FORMAT_DISPATCH,
         TAD FORMAT_KIND
         TAD NEG1
         SZA
-        JMP TRY_SIXBIT
+        JMP TRY_BINARY
         JMS I ASCII_PAYLOAD_PTR
+        JMS I PRINT_CRLF_PTR
+        JMP DONE
+
+TRY_BINARY,
+        CLA
+        TAD FORMAT_KIND
+        TAD NEG3
+        SZA
+        JMP TRY_SIXBIT
+        JMS I BINARY_PAYLOAD_PTR
         JMS I PRINT_CRLF_PTR
         JMP DONE
 
@@ -359,7 +422,7 @@ RH_ERROR,
         ISZ HEADER_BAD          / Mark header as bad
         JMP I READ_HDR
 
-        *0500
+        *1700
 READWORD,
         0
 RD_WAIT,
@@ -368,7 +431,7 @@ RD_WAIT,
         IOT 6702                / Read word into AC
         JMP I READWORD
 
-        *0520
+        *1720
 STORE_PAIR,
         0
         DCA WORD_TEMP
@@ -392,6 +455,7 @@ STORE_PAIR,
         DCA I DST_PTR
         JMP I STORE_PAIR
 
+        *1745
 SHIFT_RIGHT6,
         0
         CLL
@@ -409,7 +473,80 @@ SHIFT_RIGHT6,
         AND SIXMASK
         JMP I SHIFT_RIGHT6
 
-        *0120
+        *0600
+PRINT_WORD_OCT,
+        0
+        CLA
+        TAD WORD_TEMP
+        AND OCT_MASK0
+        DCA OCT_WORK
+        CLA
+        DCA OCT_DIGIT
+PWO_TOP_LOOP,
+        CLA
+        TAD OCT_WORK
+        TAD NEG1000
+        SMA
+        JMP PWO_TOP_DONE
+        DCA OCT_WORK
+        ISZ OCT_DIGIT
+        JMP PWO_TOP_LOOP
+PWO_TOP_DONE,
+        CLA
+        TAD OCT_DIGIT
+        TAD DIGIT_BASE
+        JMS I PUTCHR_PTR
+
+        CLA
+        TAD WORD_TEMP
+        AND OCT_MASK1
+        DCA OCT_WORK
+        CLA
+        DCA OCT_DIGIT
+PWO_SECOND_LOOP,
+        CLA
+        TAD OCT_WORK
+        TAD NEG0100
+        SMA
+        JMP PWO_SECOND_DONE
+        DCA OCT_WORK
+        ISZ OCT_DIGIT
+        JMP PWO_SECOND_LOOP
+PWO_SECOND_DONE,
+        CLA
+        TAD OCT_DIGIT
+        TAD DIGIT_BASE
+        JMS I PUTCHR_PTR
+
+        CLA
+        TAD WORD_TEMP
+        AND OCT_MASK2
+        DCA OCT_WORK
+        CLA
+        DCA OCT_DIGIT
+PWO_THIRD_LOOP,
+        CLA
+        TAD OCT_WORK
+        TAD NEG0010
+        SMA
+        JMP PWO_THIRD_DONE
+        DCA OCT_WORK
+        ISZ OCT_DIGIT
+        JMP PWO_THIRD_LOOP
+PWO_THIRD_DONE,
+        CLA
+        TAD OCT_DIGIT
+        TAD DIGIT_BASE
+        JMS I PUTCHR_PTR
+
+        CLA
+        TAD WORD_TEMP
+        AND OCT_MASK3
+        TAD DIGIT_BASE
+        JMS I PUTCHR_PTR
+        JMP I PRINT_WORD_OCT
+
+        *1100
 SIX_TO_ASCII,
         0
         DCA SIX_INDEX
@@ -456,7 +593,6 @@ PRINT_CRLF,
         JMS I PUTCHR_PTR
         JMP I PRINT_CRLF
 
-        *0640
 PUTCHR,
         0
         DCA CHAR_TEMP
@@ -512,6 +648,48 @@ ASCII_LOOP,
         JMP ASCII_LOOP
 ASCII_DONE,
         JMP I ASCII_PAYLOAD
+
+BINARY_PAYLOAD,
+        0
+        CLA
+        DCA BIN_WORD_COUNT
+BINARY_LOOP,
+        IOT 6710
+        JMP BINARY_DONE
+        IOT 6702
+        DCA WORD_TEMP
+
+        CLA
+        TAD BIN_WORD_COUNT
+        SZA
+        JMP BP_NEED_SPACE
+        JMP BP_PRINT_WORD
+BP_NEED_SPACE,
+        CLA
+        TAD SPACE
+        JMS I PUTCHR_PTR
+BP_PRINT_WORD,
+        JMS I PRINT_WORD_OCT_PTR
+
+        ISZ BIN_WORD_COUNT
+        CLA
+        TAD BIN_WORD_COUNT
+        TAD NEG8
+        SZA
+        JMP BINARY_LOOP
+        JMS I PRINT_CRLF_PTR
+        CLA
+        DCA BIN_WORD_COUNT
+        JMP BINARY_LOOP
+
+BINARY_DONE,
+        CLA
+        TAD BIN_WORD_COUNT
+        SZA
+        JMP BP_NO_TRAIL
+        JMS I PRINT_CRLF_PTR
+BP_NO_TRAIL,
+        JMP I BINARY_PAYLOAD
 
 SIXBIT_PAYLOAD,
         0
@@ -634,6 +812,14 @@ ASCII_TAG,
         0111    / I
         0040    / space
 
+BINARY_TAG,
+        0102    / B
+        0111    / I
+        0116    / N
+        0101    / A
+        0122    / R
+        0131    / Y
+
 SIXBIT_TAG,
         0123    / S
         0111    / I
@@ -648,6 +834,15 @@ ASCII_DESC,
         0103    / C
         0111    / I
         0111    / I
+        0
+
+BINARY_DESC,
+        0102    / B
+        0111    / I
+        0116    / N
+        0101    / A
+        0122    / R
+        0131    / Y
         0
 
 SIXBIT_DESC,
