@@ -3,10 +3,10 @@
 		* 0000
 		JMP I 0002
 		HLT
-		0200
+		BOOT		/ reset vector jumps into watchdog bootstrap
 
 		* 0200
-		CLA CLL		/ main: HOURS := NOW div5 div3 div2 div2, MINS := NOW mod60
+START,		CLA CLL		/ main: HOURS := NOW div5 div3 div2 div2, MINS := NOW mod60
 		TAD I PRTC
 		DCA TIME_NOW
 		TAD TIME_NOW
@@ -18,14 +18,16 @@
 		TAD TIME_NOW
 		JMS MOD60
 		DCA MINS
+		JMS I _PRINT
+		ION		/ re-enable interrupts before idling
+SPIN,		JMP SPIN	/ busy wait on watchdog
 
-		TAD TIME_NOW
-		HLT
 / -------- variables -------
 PRTC,		07760		/ PRTC
 TIME_NOW,	0		/ TIME NOW
 HOURS,		0		/ HOURS
 MINS,		0		/ MINUTES
+_PRINT,		PRINT
 
 
 DIV2,		0
@@ -86,6 +88,7 @@ P60,		00074
 		///// Printing
 		*0400
 PRINT,		0
+		JMS PRCR
 		/ HH : MM (octal)
 		CLL CLA
 		TAD I _HOURS
@@ -94,7 +97,6 @@ PRINT,		0
 		CLL CLA
 		TAD I _MINS
 		JMS PRD2
-		JMS PRCR
 		JMP I PRINT
 
 MARKER,		5555
@@ -103,7 +105,7 @@ _HOURS,		HOURS
 _MINS,		MINS
 PRTEM,		0000	/ scratchpad
 PRMASK,		0007	/ mask a single digit
-CR,		0012	/ carriage return
+CR,		0015	/ carriage return
 AZERO,		"0"	/ ASCII ZERO
 COLON,		":"
 
@@ -140,4 +142,14 @@ PUTCH0,		IOT 6601	/ wait for ready
 		JMP PUTCH0
 		IOT 6606	/ print
 		JMP I PUTCH
+
+		* 0310
+WD_PRESET,	02070		/ watchdog: reset periodic (cmd 4), 64 deciseconds
+
+		* 0320
+BOOT,		CLA CLL		/ configure watchdog then jump into main loop
+		TAD WD_PRESET
+		IOT 6552	/ PDP8_WATCHDOG_WRITE
+		ION
+		JMP START
 		
