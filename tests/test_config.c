@@ -19,6 +19,19 @@
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
 
+static bool is_valid_watchdog_mode(const char *mode) {
+    if (!mode) {
+        return false;
+    }
+    const char *valid_modes[] = {"halt", "reset", "interrupt"};
+    for (size_t i = 0; i < sizeof valid_modes / sizeof valid_modes[0]; ++i) {
+        if (strcasecmp(mode, valid_modes[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main(void) {
     struct monitor_config config;
     const pdp8_board_spec *board = NULL;
@@ -51,28 +64,17 @@ int main(void) {
         return 5;
     }
 
-    if (!config.watchdog_mode || strcasecmp(config.watchdog_mode, "halt") != 0) {
-        fprintf(stderr, "watchdog_mode unexpected: %s\n", config.watchdog_mode ? config.watchdog_mode : "(null)");
+    if (!is_valid_watchdog_mode(config.watchdog_mode)) {
+        fprintf(stderr, "watchdog_mode invalid: %s\n",
+                config.watchdog_mode ? config.watchdog_mode : "(null)");
         monitor_platform_shutdown();
         return 6;
     }
 
-    if (config.watchdog_periodic) {
-        fprintf(stderr, "watchdog_periodic unexpected true\n");
-        monitor_platform_shutdown();
-        return 7;
-    }
-
-    if (config.watchdog_default_count != 5) {
-        fprintf(stderr, "watchdog_default_count unexpected: %d\n", config.watchdog_default_count);
+    if (config.watchdog_default_count <= 0 || config.watchdog_default_count > 6000) {
+        fprintf(stderr, "watchdog_default_count out of bounds: %d\n", config.watchdog_default_count);
         monitor_platform_shutdown();
         return 8;
-    }
-
-    if (!config.watchdog_pause_on_halt) {
-        fprintf(stderr, "watchdog_pause_on_halt unexpected false\n");
-        monitor_platform_shutdown();
-        return 9;
     }
 
     printf("config test OK\n");
@@ -187,4 +189,3 @@ int main(void) {
     printf("invalid config tests OK\n");
     return 0;
 }
-

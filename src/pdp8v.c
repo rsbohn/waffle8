@@ -25,20 +25,8 @@
 #include "emulator/watchdog.h"
 #include "monitor_config.h"
 #include "monitor_platform.h"
+#include "pdp8v_runtime.h"
 
-struct pdp8v_runtime {
-    pdp8_t *cpu;
-    pdp8_kl8e_console_t *console;
-    pdp8_line_printer_t *printer;
-    pdp8_paper_tape_device_t *paper_tape;
-    pdp8_magtape_device_t *magtape;
-    pdp8_watchdog_t *watchdog;
-    struct monitor_config config;
-    size_t memory_words;
-    const char *program_name;
-};
-
-static pdp8_kl8e_console_t *g_console = NULL;
 static WINDOW *header_win = NULL;
 static WINDOW *console_win = NULL;
 static WINDOW *printer_win = NULL;
@@ -49,6 +37,7 @@ static bool g_paused = false;
 /* Forward declarations */
 static void update_registers_display(struct pdp8v_runtime *runtime);
 static void update_watchdog_display(struct pdp8v_runtime *runtime);
+static void wait_for_exit_prompt(const char *message);
 
 /* Minimal MD5 implementation for file checksums */
 typedef struct {
@@ -119,8 +108,10 @@ static int load_srec_image(pdp8_t *cpu,
 
     md5_ctx md5;
     md5_init(&md5);
+    size_t line_number = 0;
 
     while (fgets(line, sizeof line, fp) != NULL) {
+        line_number++;
         char *cursor = line;
         size_t raw_len = strlen(cursor);
         md5_update(&md5, (const unsigned char *)cursor, raw_len);
@@ -141,39 +132,70 @@ static int load_srec_image(pdp8_t *cpu,
         const char type = (char)toupper((unsigned char)cursor[1]);
         if (type == '1' || type == '2' || type == '3') {
             /* Parse S-record data */
-            const size_t addr_digits = (type == '1') ? 4u : (type == '2') ? 6u : 8u;
+            const size_t addr_bytes = (type == '1') ? 2u : (type == '2') ? 3u : 4u;
+            const size_t addr_digits = addr_bytes * 2u;
 
             if (len < 4u + addr_digits + 2u) {
                 continue;
             }
 
+            char count_buf[3] = {cursor[2], cursor[3], '\0'};
+            char *endptr = NULL;
+            unsigned long count_val = strtoul(count_buf, &endptr, 16);
+            if (!endptr || *endptr != '\0' || count_val == 0ul || count_val > 0xFFul) {
+                continue;
+            }
+
+            const size_t count_bytes = (size_t)count_val;
+            if (count_bytes <= addr_bytes) {
+                continue;
+            }
+
+            const size_t data_bytes = count_bytes - addr_bytes - 1u;  /* subtract checksum */
+            const char *addr_ptr = cursor + 4;
+            const char *data_ptr = addr_ptr + addr_digits;
+            const char *checksum_ptr = data_ptr + data_bytes * 2u;
+
+            if ((size_t)(checksum_ptr + 2u - cursor) > len) {
+                continue;
+            }
+
             /* Extract address */
             char addr_buf[9];
-            memcpy(addr_buf, cursor + 4, addr_digits);
+            memcpy(addr_buf, addr_ptr, addr_digits);
             addr_buf[addr_digits] = '\0';
-            char *endptr = NULL;
             unsigned long base_address = strtoul(addr_buf, &endptr, 16);
             if (!endptr || *endptr != '\0') {
                 continue;
             }
 
-            /* Parse data bytes */
-            const size_t checksum_offset = len - 2u;
-            const char *data_ptr = cursor + 4 + addr_digits;
-            const size_t data_hex_len = checksum_offset - (size_t)(data_ptr - cursor);
-            
-            if (data_hex_len % 2u != 0) {
+            uint32_t checksum_accum = count_bytes & 0xFFu;
+            bool parse_error = false;
+
+            for (size_t i = 0; i < addr_bytes; ++i) {
+                char byte_buf[3] = {addr_ptr[i * 2u], addr_ptr[i * 2u + 1u], '\0'};
+                unsigned long addr_byte = strtoul(byte_buf, &endptr, 16);
+                if (!endptr || *endptr != '\0' || addr_byte > 0xFFul) {
+                    parse_error = true;
+                    break;
+                }
+                checksum_accum += (uint8_t)addr_byte;
+            }
+
+            if (parse_error) {
                 continue;
             }
 
-            const size_t data_bytes = data_hex_len / 2u;
+            /* Parse data bytes */
             for (size_t i = 0; i < data_bytes; ++i) {
                 char byte_buf[3] = {data_ptr[i * 2u], data_ptr[i * 2u + 1u], '\0'};
                 unsigned long value = strtoul(byte_buf, &endptr, 16);
                 if (!endptr || *endptr != '\0' || value > 0xFFul) {
-                    continue;
+                    parse_error = true;
+                    break;
                 }
 
+                checksum_accum += (uint8_t)value;
                 const size_t absolute = base_address + i;
                 if (absolute >= memory_bytes) {
                     continue;
@@ -182,6 +204,25 @@ static int load_srec_image(pdp8_t *cpu,
                 byte_data[absolute] = (uint8_t)value;
                 byte_present[absolute] = true;
                 have_data = true;
+            }
+
+            if (parse_error) {
+                continue;
+            }
+
+            char checksum_buf[3] = {checksum_ptr[0], checksum_ptr[1], '\0'};
+            unsigned long record_checksum = strtoul(checksum_buf, &endptr, 16);
+            if (!endptr || *endptr != '\0' || record_checksum > 0xFFul) {
+                continue;
+            }
+
+            uint8_t computed_checksum = (uint8_t)(~checksum_accum & 0xFFu);
+            if (((uint8_t)record_checksum) != computed_checksum) {
+                fprintf(stderr, "Checksum mismatch in '%s' at line %zu.\n", path, line_number);
+                free(byte_data);
+                free(byte_present);
+                fclose(fp);
+                return -1;
             }
         } else if (type == '7' || type == '8' || type == '9') {
             /* Parse start address */
@@ -334,93 +375,19 @@ static void monitor_printer_write(const char *text, size_t length) {
     wrefresh(printer_win);
 }
 
-
-
-static bool pdp8v_runtime_create(struct pdp8v_runtime *runtime,
-                                 const pdp8_board_spec *board) {
-    if (!runtime || !board) {
-        return false;
-    }
-
-    runtime->memory_words = board->memory_words ? board->memory_words : 4096u;
-
-    runtime->cpu = pdp8_api_create_for_board(board);
-    if (!runtime->cpu) {
-        return false;
-    }
-
-    runtime->console = monitor_platform_create_console();
-    if (!runtime->console) {
-        return false;
-    }
-
-    if (pdp8_kl8e_console_attach(runtime->cpu, runtime->console) != 0) {
-        return false;
-    }
-
-    g_console = runtime->console;
-
-    /* For now, use standard printer - we'll intercept output later */
-    runtime->printer = monitor_platform_create_printer();
-    if (!runtime->printer) {
-        return false;
-    }
-
-    if (pdp8_line_printer_attach(runtime->cpu, runtime->printer) != 0) {
-        return false;
-    }
-
-    /* Initialize watchdog if configured */
-    if (runtime->config.watchdog_present) {
-        runtime->watchdog = pdp8_watchdog_create();
-        if (runtime->watchdog) {
-            if (pdp8_watchdog_attach(runtime->cpu, runtime->watchdog) != 0) {
-                pdp8_watchdog_destroy(runtime->watchdog);
-                runtime->watchdog = NULL;
-            }
-        }
-    }
-
-    return true;
+static void kl8e_console_output_callback(uint8_t ch, void *context) {
+    (void)context;
+    char buffer = (char)ch;
+    monitor_console_write(&buffer, 1);
 }
 
-static void pdp8v_runtime_teardown(struct pdp8v_runtime *runtime) {
-    if (!runtime) {
-        return;
-    }
-    
-    if (runtime->watchdog) {
-        pdp8_watchdog_destroy(runtime->watchdog);
-        runtime->watchdog = NULL;
-    }
-    
-    if (runtime->magtape) {
-        pdp8_magtape_device_destroy(runtime->magtape);
-        runtime->magtape = NULL;
-    }
-    
-    if (runtime->paper_tape) {
-        pdp8_paper_tape_device_destroy(runtime->paper_tape);
-        runtime->paper_tape = NULL;
-    }
-    
-    if (runtime->printer) {
-        pdp8_line_printer_destroy(runtime->printer);
-        runtime->printer = NULL;
-    }
-    
-    if (runtime->console) {
-        pdp8_kl8e_console_destroy(runtime->console);
-        runtime->console = NULL;
-    }
-    
-    if (runtime->cpu) {
-        pdp8_api_destroy(runtime->cpu);
-        runtime->cpu = NULL;
-    }
-    
-    g_console = NULL;
+static void line_printer_output_callback(uint8_t ch, void *context) {
+    (void)context;
+    char buffer = (char)ch;
+    monitor_printer_write(&buffer, 1);
 }
+
+
 
 /* 10Hz timing: sleep for 100ms between cycles */
 static void pdp8v_idle(void) {
@@ -446,8 +413,9 @@ static int pdp8v_run_cycle(struct pdp8v_runtime *runtime) {
         monitor_console_puts(pause_msg);
     } else if (ch != ERR && ch >= 0 && ch <= 255) {
         /* Pass normal keys to the PDP-8 console */
-        if (g_console) {
-            pdp8_kl8e_console_queue_input(g_console, (uint8_t)ch);
+        pdp8_kl8e_console_t *console = pdp8v_get_console();
+        if (console) {
+            pdp8_kl8e_console_queue_input(console, (uint8_t)ch);
         }
     }
 
@@ -472,19 +440,12 @@ static int pdp8v_run_cycle(struct pdp8v_runtime *runtime) {
     return executed;
 }
 
-static void pdp8v_runtime_init(struct pdp8v_runtime *runtime) {
-    if (!runtime) {
-        return;
-    }
-    memset(runtime, 0, sizeof(*runtime));
-    monitor_config_init(&runtime->config);
-}
-
 void monitor_platform_enqueue_key(uint8_t ch) {
-    if (!g_console) {
+    pdp8_kl8e_console_t *console = pdp8v_get_console();
+    if (!console) {
         return;
     }
-    (void)pdp8_kl8e_console_queue_input(g_console, ch);
+    (void)pdp8_kl8e_console_queue_input(console, ch);
 }
 
 static void init_curses_display(const char *program_name) {
@@ -647,6 +608,58 @@ static void cleanup_curses_display(void) {
     endwin();
 }
 
+static void wait_for_exit_prompt(const char *message) {
+    const char *prompt_text = message ? message : "Press any key to exit...";
+    const int padding = 4;
+    const int min_width = 20;
+    const int height = 3;
+    int width = (int)strlen(prompt_text) + padding;
+    if (width < min_width) {
+        width = min_width;
+    }
+    if (width >= COLS) {
+        width = COLS - 1;
+    }
+    if (width < 4) {
+        width = 4;
+    }
+
+    int starty = (LINES - height) / 2;
+    int startx = (COLS - width) / 2;
+    if (starty < 0) {
+        starty = 0;
+    }
+    if (startx < 0) {
+        startx = 0;
+    }
+
+    nodelay(stdscr, FALSE);
+    WINDOW *prompt_win = newwin(height, width, starty, startx);
+    if (prompt_win) {
+        box(prompt_win, 0, 0);
+        int max_text = width - 4;
+        if (max_text > 0) {
+            mvwprintw(prompt_win, 1, 2, "%.*s", max_text, prompt_text);
+        }
+        wrefresh(prompt_win);
+        wgetch(prompt_win);
+        delwin(prompt_win);
+    } else {
+        wgetch(stdscr);
+    }
+    nodelay(stdscr, TRUE);
+
+    if (header_win) {
+        wrefresh(header_win);
+    }
+    if (console_win) {
+        wrefresh(console_win);
+    }
+    if (printer_win) {
+        wrefresh(printer_win);
+    }
+}
+
 int main(int argc, char **argv) {
     const char *startup_image = NULL;
 
@@ -683,6 +696,17 @@ int main(int argc, char **argv) {
     
     /* Force a screen refresh to ensure everything is visible */
     refresh();
+
+    if (runtime.console) {
+        pdp8_kl8e_console_set_output_callback(runtime.console,
+                                              kl8e_console_output_callback,
+                                              NULL);
+    }
+    if (runtime.printer) {
+        pdp8_line_printer_set_output_callback(runtime.printer,
+                                              line_printer_output_callback,
+                                              NULL);
+    }
 
     /* Show initial startup message */
     monitor_console_puts("PDP-8 Virtual Machine initialized");
@@ -739,7 +763,7 @@ int main(int argc, char **argv) {
         } else if (result < 0) {
             monitor_console_puts("Execution error occurred");
             monitor_console_puts("Press any key to exit...");
-            getch();
+            wait_for_exit_prompt("Press any key to exit...");
             exit_reason = 1;
             break;
         }
@@ -747,7 +771,7 @@ int main(int argc, char **argv) {
         if (pdp8_api_is_halted(runtime.cpu)) {
             monitor_console_puts("CPU halted");
             monitor_console_puts("Press any key to exit...");
-            getch();
+            wait_for_exit_prompt("Press any key to exit...");
             exit_reason = 2;
             break;
         }

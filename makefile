@@ -16,6 +16,7 @@ MONITOR_OBJS = src/monitor.c \
         src/emulator/magtape_device.c
 
 PDP8V_OBJS = src/pdp8v.c \
+        src/pdp8v_runtime.c \
         src/monitor_config.c \
         src/monitor_platform_posix.c \
 	src/emulator/main.c \

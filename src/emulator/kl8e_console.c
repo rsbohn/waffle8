@@ -23,6 +23,8 @@ struct pdp8_kl8e_console {
     struct pdp8_buffer pending_input;
     struct pdp8_buffer output_log;
     bool teleprinter_flag;
+    pdp8_kl8e_console_output_callback output_callback;
+    void *output_context;
 };
 
 static void buffer_release(struct pdp8_buffer *buffer) {
@@ -109,6 +111,9 @@ static void teleprinter_record_output(pdp8_kl8e_console_t *console, uint8_t ch) 
         return;
     }
     buffer_push_back(&console->output_log, ch);
+    if (console->output_callback) {
+        console->output_callback(ch, console->output_context);
+    }
     if (console->output_stream) {
         fputc((int)ch, console->output_stream);
         fflush(console->output_stream);
@@ -261,4 +266,23 @@ int pdp8_kl8e_console_flush(pdp8_kl8e_console_t *console) {
         return 0;
     }
     return fflush(console->output_stream);
+}
+
+int pdp8_kl8e_console_set_output_stream(pdp8_kl8e_console_t *console, FILE *stream) {
+    if (!console) {
+        return -1;
+    }
+    console->output_stream = stream;
+    return 0;
+}
+
+int pdp8_kl8e_console_set_output_callback(pdp8_kl8e_console_t *console,
+                                          pdp8_kl8e_console_output_callback callback,
+                                          void *context) {
+    if (!console) {
+        return -1;
+    }
+    console->output_callback = callback;
+    console->output_context = context;
+    return 0;
 }
