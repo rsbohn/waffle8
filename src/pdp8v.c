@@ -1,6 +1,6 @@
 /* PDP-8 Virtual Machine */
 /* Emulation of the PDP-8 architecture */
-/* Runs at 10 Hz */
+/* Runs at 10 Hz (normal mode) or 1000 Hz (turbo mode) */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -33,6 +33,7 @@ static WINDOW *printer_win = NULL;
 static int console_row = 0;
 static int printer_row = 0;
 static bool g_paused = false;
+static bool g_turbo_mode = false;
 
 /* Forward declarations */
 static void update_registers_display(struct pdp8v_runtime *runtime);
@@ -389,10 +390,31 @@ static void line_printer_output_callback(uint8_t ch, void *context) {
 
 
 
-/* 10Hz timing: sleep for 100ms between cycles */
+/* Timing: 10Hz (100ms) in normal mode, 1000Hz (1ms) in turbo mode */
 static void pdp8v_idle(void) {
-    struct timespec req = {0, 100000000};  /* 100 milliseconds */
+    struct timespec req;
+    if (g_turbo_mode) {
+        req.tv_sec = 0;
+        req.tv_nsec = 1000000;  /* 1 millisecond for 1000Hz */
+    } else {
+        req.tv_sec = 0;
+        req.tv_nsec = 100000000;  /* 100 milliseconds for 10Hz */
+    }
     nanosleep(&req, NULL);
+}
+
+static int pdp8v_run_cycle_turbo(struct pdp8v_runtime *runtime) {
+    if (!runtime || !runtime->cpu) {
+        return -1;
+    }
+
+    /* In turbo mode, run one instruction without display updates */
+    int executed = pdp8_api_run(runtime->cpu, 1);
+    
+    /* Sleep to maintain 1000Hz rate */
+    pdp8v_idle();
+
+    return executed;
 }
 
 static int pdp8v_run_cycle(struct pdp8v_runtime *runtime) {
@@ -434,7 +456,7 @@ static int pdp8v_run_cycle(struct pdp8v_runtime *runtime) {
     update_registers_display(runtime);
     update_watchdog_display(runtime);
     
-    /* Sleep to maintain 10Hz rate */
+    /* Sleep to maintain rate */
     pdp8v_idle();
 
     return executed;
@@ -663,12 +685,23 @@ static void wait_for_exit_prompt(const char *message) {
 int main(int argc, char **argv) {
     const char *startup_image = NULL;
 
-    /* Simple argument parsing: expect a single .srec file */
-    if (argc == 2) {
-        startup_image = argv[1];
-    } else if (argc > 2) {
-        fprintf(stderr, "Usage: %s [image.srec]\n", argv[0]);
-        return EXIT_FAILURE;
+    /* Argument parsing: handle --turbo flag and optional .srec file */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--turbo") == 0) {
+            g_turbo_mode = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("PDP-8 Virtual Machine\n");
+            printf("Usage: %s [--turbo] [image.srec]\n", argv[0]);
+            printf("  --turbo    Run at 1000 Hz with no display (default: 10 Hz with ncurses)\n");
+            printf("  image.srec Optional S-record file to load and execute\n");
+            return EXIT_SUCCESS;
+        } else if (startup_image == NULL) {
+            startup_image = argv[i];
+        } else {
+            fprintf(stderr, "Usage: %s [--turbo] [image.srec]\n", argv[0]);
+            fprintf(stderr, "Use --help for more information\n");
+            return EXIT_FAILURE;
+        }
     }
 
     struct pdp8v_runtime runtime;
@@ -691,11 +724,20 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    /* Initialize curses display */
-    init_curses_display(startup_image);
-    
-    /* Force a screen refresh to ensure everything is visible */
-    refresh();
+    /* Initialize display - curses only in normal mode */
+    if (!g_turbo_mode) {
+        init_curses_display(startup_image);
+        
+        /* Force a screen refresh to ensure everything is visible */
+        refresh();
+    } else {
+        printf("PDP-8 Virtual Machine (Turbo Mode - 1000 Hz)\n");
+        if (startup_image) {
+            printf("Program: %s\n", startup_image);
+        }
+        printf("Running in turbo mode (no display updates)...\n");
+        fflush(stdout);
+    }
 
     if (runtime.console) {
         pdp8_kl8e_console_set_output_callback(runtime.console,
@@ -744,37 +786,54 @@ int main(int argc, char **argv) {
         }
     }
 
-    monitor_console_puts("Press Delete to quit, Home to pause/resume. Other keys are sent to PDP-8");
+    if (!g_turbo_mode) {
+        monitor_console_puts("Press Delete to quit, Home to pause/resume. Other keys are sent to PDP-8");
 
-    /* Initial register and watchdog display */
-    update_registers_display(&runtime);
-    update_watchdog_display(&runtime);
+        /* Initial register and watchdog display */
+        update_registers_display(&runtime);
+        update_watchdog_display(&runtime);
+    }
 
-    /* Main execution loop - run at 10Hz */
+    /* Main execution loop */
     int exit_reason = 0;  /* 0=user_quit, 1=error, 2=halt */
     while (true) {
-        int result = pdp8v_run_cycle(&runtime);
+        int result;
+        if (g_turbo_mode) {
+            result = pdp8v_run_cycle_turbo(&runtime);
+        } else {
+            result = pdp8v_run_cycle(&runtime);
+        }
         
         if (result == -2) {
-            /* User quit */
+            /* User quit (only possible in non-turbo mode) */
             exit_reason = 0;
             break;
         } else if (result < 0) {
-            monitor_console_puts("Execution error occurred");
-            wait_for_exit_prompt("Press any key to exit...");
+            if (g_turbo_mode) {
+                printf("Execution error occurred\n");
+            } else {
+                monitor_console_puts("Execution error occurred");
+                wait_for_exit_prompt("Press any key to exit...");
+            }
             exit_reason = 1;
             break;
         }
         
         if (pdp8_api_is_halted(runtime.cpu)) {
-            monitor_console_puts("CPU halted");
-            wait_for_exit_prompt("Press any key to exit...");
+            if (g_turbo_mode) {
+                printf("CPU halted\n");
+            } else {
+                monitor_console_puts("CPU halted");
+                wait_for_exit_prompt("Press any key to exit...");
+            }
             exit_reason = 2;
             break;
         }
     }
 
-    cleanup_curses_display();
+    if (!g_turbo_mode) {
+        cleanup_curses_display();
+    }
 
     /* Print termination summary to main terminal */
     printf("\nPDP-8 Virtual Machine Termination Summary\n");
