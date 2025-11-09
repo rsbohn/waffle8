@@ -8,10 +8,8 @@
 unit
 .project
 __pycache__
-monitor
+bin/*
 checkpoint/*
 magtape/*
-!magtape/demo-hello-ascii.tap
-!magtape/demo-hello-sixbit.tap
 tests/pdp8_tests
 trace-args
