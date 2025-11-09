@@ -94,7 +94,7 @@ OCT_DIGIT,  0
 
         *0200
 START,  CLA CLL
-        TAD 0007                / Load requested unit from zero-page
+        IAC                     / UNIT1
         AND UNIT_MASK
         DCA UNIT_NUM
 

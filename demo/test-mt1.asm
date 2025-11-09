@@ -24,8 +24,9 @@ TAB_PTR,        0
 CHARMAP_PTR,    CHARMAP
 HDR_ADDR,       0050
 LBL_ADDR,       0056
+WDMODE,         3120
 
-        *0050
+        *0054
 HEADER,         0               / Storage for 6-word header
                 0
                 0
@@ -42,6 +43,9 @@ LABEL_BUF,      0               / Storage for decoded label (6 chars)
 
         *0200
 START,  CLA CLL
+        TAD WDMODE
+        IOT 6552
+        CLA CLL
         TAD UNIT1
         IOT 6701                / Select unit 1 (GO)
 

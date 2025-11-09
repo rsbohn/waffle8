@@ -710,7 +710,6 @@ int main(int argc, char **argv) {
 
     /* Show initial startup message */
     monitor_console_puts("PDP-8 Virtual Machine initialized");
-    monitor_console_puts("Note: Line printer output currently goes to console pane");
 
     /* Load startup image if provided */
     if (startup_image) {
@@ -745,7 +744,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    monitor_console_puts("Press Delete to quit, Home to pause/resume, other keys sent to PDP-8");
+    monitor_console_puts("Press Delete to quit, Home to pause/resume. Other keys are sent to PDP-8");
 
     /* Initial register and watchdog display */
     update_registers_display(&runtime);
@@ -762,7 +761,6 @@ int main(int argc, char **argv) {
             break;
         } else if (result < 0) {
             monitor_console_puts("Execution error occurred");
-            monitor_console_puts("Press any key to exit...");
             wait_for_exit_prompt("Press any key to exit...");
             exit_reason = 1;
             break;
@@ -770,7 +768,6 @@ int main(int argc, char **argv) {
         
         if (pdp8_api_is_halted(runtime.cpu)) {
             monitor_console_puts("CPU halted");
-            monitor_console_puts("Press any key to exit...");
             wait_for_exit_prompt("Press any key to exit...");
             exit_reason = 2;
             break;
@@ -812,13 +809,10 @@ int main(int argc, char **argv) {
     int pending = pdp8_api_peek_interrupt_pending(runtime.cpu);
     
     printf("\nFinal Register State:\n");
-    printf("  PC (Program Counter): %04o (octal), %d (decimal)\n", 
-           pc & 0x0FFF, pc & 0x0FFF);
-    printf("  AC (Accumulator):     %04o (octal), %d (decimal)\n", 
-           ac & 0x0FFF, ac & 0x0FFF);
-    printf("  LINK:                 %o\n", link & 0x1);
-    printf("  Switch Register:      %04o (octal), %d (decimal)\n", 
-           sw & 0x0FFF, sw & 0x0FFF);
+    printf(" PC=%04o", pc & 0x0FFF);
+    printf(" AC=%04o", ac & 0x0FFF);
+    printf(" L =%o", link & 0x1);
+    printf(" SR=%04o\n", sw & 0x0FFF);
     printf("  CPU State:            %s\n", halted ? "HALTED" : "RUNNING");
     printf("  Interrupts:           %s\n", ion_state == 1 ? "ENABLED" : "DISABLED");
     printf("  Pending Interrupts:   %d\n", pending);
