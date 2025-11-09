@@ -634,6 +634,11 @@ def main() -> int:
                             
                             control = ((cmd & 0x7) << 9) | (config.watchdog_default_count & 0x1FF)
                             execute_iot(lib, cpu, PDP8_WATCHDOG_IOT_BASE | PDP8_WATCHDOG_BIT_WRITE, ac=control)
+                        
+                        # Report watchdog status
+                        mode_name = (config.watchdog_mode or "reset").lower()
+                        periodic_str = "periodic" if config.watchdog_periodic else "one-shot"
+                        print(f"Watchdog initialized: mode={mode_name}, {periodic_str}, count={config.watchdog_default_count}.")
             except Exception as exc:
                 print(f"Warning: watchdog setup failed: {exc}", file=sys.stderr)
 
