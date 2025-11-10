@@ -1779,22 +1779,26 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         } else {
             /* Configure default mode/count by issuing a WRITE IOT if defaults provided */
             int cmd = 0;
+            bool cmd_allows_periodic_upgrade = true;
             if (runtime->config.watchdog_mode) {
                 if (strcasecmp(runtime->config.watchdog_mode, "halt") == 0) {
                     cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
                 } else if (strcasecmp(runtime->config.watchdog_mode, "reset") == 0) {
                     cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
                 } else if (strcasecmp(runtime->config.watchdog_mode, "interrupt") == 0) {
-                    /* interrupt mode not yet implemented; fallback to reset */
-                    cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
+                    cmd = PDP8_WD_CMD_INTERRUPT_ONE_SHOT;
+                } else if (strcasecmp(runtime->config.watchdog_mode, "tick") == 0) {
+                    cmd = PDP8_WD_CMD_TICK_PERIODIC;
+                    cmd_allows_periodic_upgrade = false;
                 }
             } else {
                 /* default to halt */
                 cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
             }
-            if (runtime->config.watchdog_periodic) {
+            if (runtime->config.watchdog_periodic && cmd_allows_periodic_upgrade) {
                 if (cmd == PDP8_WD_CMD_HALT_ONE_SHOT) cmd = PDP8_WD_CMD_HALT_PERIODIC;
                 else if (cmd == PDP8_WD_CMD_RESET_ONE_SHOT) cmd = PDP8_WD_CMD_RESET_PERIODIC;
+                else if (cmd == PDP8_WD_CMD_INTERRUPT_ONE_SHOT) cmd = PDP8_WD_CMD_INTERRUPT_PERIODIC;
             }
             int count = runtime->config.watchdog_default_count > 0 ? runtime->config.watchdog_default_count : 0;
             uint16_t control = (uint16_t)(((cmd & 0x7) << 9) | (count & 0x1FF));

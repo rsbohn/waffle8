@@ -17,6 +17,7 @@
 #include "../src/emulator/paper_tape.h"
 #include "../src/emulator/paper_tape_device.h"
 #include "../src/emulator/magtape_device.h"
+#include "../src/emulator/watchdog.h"
 #include <unistd.h>
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
@@ -927,6 +928,48 @@ static int test_board_spec(void) {
     return 1;
 }
 
+static int test_watchdog_tick_mode(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("CPU created", cpu != NULL);
+
+    pdp8_watchdog_t *wd = pdp8_watchdog_create();
+    ASSERT_TRUE("watchdog created", wd != NULL);
+    ASSERT_INT_EQ("attach watchdog", 0, pdp8_watchdog_attach(cpu, wd));
+
+    uint16_t control = (uint16_t)((PDP8_WD_CMD_TICK_PERIODIC & 0x7) << 9);
+    control |= 0001; /* 1 decisecond */
+    pdp8_api_set_ac(cpu, control);
+    pdp8_api_write_mem(cpu, 0, PDP8_WATCHDOG_WRITE);
+    pdp8_api_set_pc(cpu, 0);
+    ASSERT_INT_EQ("write control", 1, pdp8_api_step(cpu));
+
+    struct pdp8_watchdog_status status;
+    bool tick_observed = false;
+    for (int i = 0; i < 200; ++i) {
+        pdp8_api_step(cpu);
+        ASSERT_INT_EQ("status", 0, pdp8_watchdog_get_status(wd, &status));
+        if (status.expired) {
+            tick_observed = true;
+            break;
+        }
+        struct timespec req = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
+        nanosleep(&req, NULL);
+    }
+    ASSERT_TRUE("tick latched", tick_observed);
+    ASSERT_INT_EQ("cpu not halted", 0, pdp8_api_is_halted(cpu));
+
+    /* clear flag via RESTART */
+    pdp8_api_write_mem(cpu, 0, PDP8_WATCHDOG_RESTART);
+    pdp8_api_set_pc(cpu, 0);
+    ASSERT_INT_EQ("restart", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("status", 0, pdp8_watchdog_get_status(wd, &status));
+    ASSERT_INT_EQ("flag cleared", 0, status.expired);
+
+    pdp8_watchdog_destroy(wd);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_ion_ioff(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
     ASSERT_TRUE("CPU created", cpu != NULL);
@@ -1047,6 +1090,7 @@ int main(int argc, char **argv) {
         //{"paper tape parser", test_paper_tape_parser},
         //{"paper tape device", test_paper_tape_device},
         {"fruit jam board", test_board_spec},
+        {"watchdog tick mode", test_watchdog_tick_mode},
         {"ion ioff", test_ion_ioff},
         {"interrupt pending count", test_interrupt_pending_count},
         {"interrupt dispatch", test_interrupt_dispatch},

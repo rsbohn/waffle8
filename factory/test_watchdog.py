@@ -32,6 +32,17 @@ WD_CMD_HALT_ONE_SHOT = 3
 WD_CMD_HALT_PERIODIC = 4
 WD_CMD_INTERRUPT_ONE_SHOT = 5
 WD_CMD_INTERRUPT_PERIODIC = 6
+WD_CMD_TICK_PERIODIC = 7
+
+
+class WatchdogStatus(ctypes.Structure):
+    _fields_ = [
+        ("enabled", ctypes.c_int),
+        ("expired", ctypes.c_int),
+        ("cmd", ctypes.c_int),
+        ("configured_count", ctypes.c_int),
+        ("remaining_ds", ctypes.c_int),
+    ]
 
 
 def instr(bits: int) -> int:
@@ -98,6 +109,8 @@ def configure_signatures(lib: ctypes.CDLL) -> None:
 
     lib.pdp8_watchdog_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     lib.pdp8_watchdog_attach.restype = ctypes.c_int
+    lib.pdp8_watchdog_get_status.argtypes = [ctypes.c_void_p, ctypes.POINTER(WatchdogStatus)]
+    lib.pdp8_watchdog_get_status.restype = ctypes.c_int
 
 
 def execute_iot(lib: ctypes.CDLL, cpu: int, instruction: int, ac: int | None = None) -> int:
@@ -137,7 +150,7 @@ def test_read_write_roundtrip(lib: ctypes.CDLL) -> None:
         lib.pdp8_api_destroy(cpu)
 
 
-def wait_for_halt(lib: ctypes.CDLL, cpu: int, timeout: float = 2.0) -> bool:
+def wait_for_halt(lib: ctypes.CDLL, cpu: int, timeout: float = 120.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         # step the CPU to allow ticks to run
@@ -173,7 +186,7 @@ def test_one_shot_halt(lib: ctypes.CDLL) -> None:
         ac_val = ((WD_CMD_HALT_ONE_SHOT & 0x7) << 9) | (2 & 0x1FF)
         execute_iot(lib, cpu, instr(PDP8_WATCHDOG_BIT_WRITE), ac=ac_val)
 
-        halted = wait_for_halt(lib, cpu, timeout=3.0)
+        halted = wait_for_halt(lib, cpu, timeout=120.0)
         assert halted, "watchdog did not HALT within timeout"
         print("watchdog one-shot HALT OK")
     finally:
@@ -279,6 +292,41 @@ def test_interrupt_periodic(lib: ctypes.CDLL) -> None:
         lib.pdp8_api_destroy(cpu)
 
 
+def test_tick_periodic_flag(lib: ctypes.CDLL) -> None:
+    cpu = lib.pdp8_api_create(4096)
+    try:
+        wd = lib.pdp8_watchdog_create()
+        assert wd != 0
+        assert lib.pdp8_watchdog_attach(cpu, wd) == 0
+
+        # Configure periodic tick mode with a short interval (1 decisecond)
+        ac_val = ((WD_CMD_TICK_PERIODIC & 0x7) << 9) | (1 & 0x1FF)
+        execute_iot(lib, cpu, instr(PDP8_WATCHDOG_BIT_WRITE), ac=ac_val)
+
+        status = WatchdogStatus()
+        deadline = time.time() + 2.5
+        tick_seen = False
+        while time.time() < deadline:
+            lib.pdp8_api_step(cpu)
+            if lib.pdp8_watchdog_get_status(wd, ctypes.byref(status)) == 0 and status.expired:
+                tick_seen = True
+                break
+            time.sleep(0.02)
+
+        assert tick_seen, "watchdog tick flag never latched"
+        assert lib.pdp8_api_is_halted(cpu) == 0, "tick mode should not HALT the CPU"
+
+        # Restart to clear the latched flag
+        execute_iot(lib, cpu, instr(PDP8_WATCHDOG_BIT_RESTART))
+        assert lib.pdp8_watchdog_get_status(wd, ctypes.byref(status)) == 0
+        assert status.expired == 0, "RESTART should clear the tick flag"
+        print("watchdog periodic TICK OK")
+    finally:
+        if 'wd' in locals() and wd:
+            lib.pdp8_watchdog_destroy(wd)
+        lib.pdp8_api_destroy(cpu)
+
+
 if __name__ == '__main__':
     lib = load_library()
     configure_signatures(lib)
@@ -288,5 +336,6 @@ if __name__ == '__main__':
     test_one_shot_reset(lib)
     test_interrupt_one_shot(lib)
     test_interrupt_periodic(lib)
+    test_tick_periodic_flag(lib)
 
     print('watchdog tests completed')

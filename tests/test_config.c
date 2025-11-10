@@ -23,7 +23,7 @@ static bool is_valid_watchdog_mode(const char *mode) {
     if (!mode) {
         return false;
     }
-    const char *valid_modes[] = {"halt", "reset", "interrupt"};
+    const char *valid_modes[] = {"halt", "reset", "interrupt", "tick"};
     for (size_t i = 0; i < sizeof valid_modes / sizeof valid_modes[0]; ++i) {
         if (strcasecmp(mode, valid_modes[i]) == 0) {
             return true;

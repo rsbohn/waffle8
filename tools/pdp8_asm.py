@@ -254,6 +254,13 @@ class PDP8Assembler:
         try:
             return self._parse_number(token)
         except ValueError:
+            # Check for auto-pointer syntax &SYMBOL
+            if token.startswith('&'):
+                symbol_name = token[1:].upper()
+                if symbol_name not in self.symbols:
+                    raise AsmError(f"Unknown symbol '{token[1:]}'", line_no, text)
+                return self.symbols[symbol_name]  # Return the address of the symbol
+            
             name = token.upper()
             if name not in self.symbols:
                 raise AsmError(f"Unknown symbol '{token}'", line_no, text)
