@@ -19,7 +19,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--monitor",
-        default="./monitor",
+        default="./bin/monitor",
         help="Path to monitor executable (default: ./monitor)",
     )
     parser.add_argument(

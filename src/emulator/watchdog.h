@@ -33,6 +33,7 @@ extern "C" {
 #define PDP8_WD_CMD_HALT_PERIODIC 4
 #define PDP8_WD_CMD_INTERRUPT_ONE_SHOT 5
 #define PDP8_WD_CMD_INTERRUPT_PERIODIC 6
+#define PDP8_WD_CMD_TICK_PERIODIC 7
 
 typedef struct pdp8_watchdog pdp8_watchdog_t;
 typedef struct pdp8 pdp8_t;

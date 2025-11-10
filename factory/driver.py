@@ -31,6 +31,13 @@ PDP8_WATCHDOG_IOT_BASE = 0o6000 | ((PDP8_WATCHDOG_DEVICE_CODE & 0x3F) << 3)
 PDP8_WATCHDOG_BIT_WRITE = 0x1
 PDP8_WATCHDOG_BIT_READ = 0x2
 PDP8_WATCHDOG_BIT_RESTART = 0x4
+WD_CMD_HALT_ONE_SHOT = 3
+WD_CMD_HALT_PERIODIC = 4
+WD_CMD_RESET_ONE_SHOT = 1
+WD_CMD_RESET_PERIODIC = 2
+WD_CMD_INTERRUPT_ONE_SHOT = 5
+WD_CMD_INTERRUPT_PERIODIC = 6
+WD_CMD_TICK_PERIODIC = 7
 
 
 @dataclass
@@ -619,19 +626,27 @@ def main() -> int:
                     else:
                         # Initialize the watchdog control register via IOT if a default count was provided
                         if config.watchdog_default_count > 0:
-                            # Parse watchdog mode: "halt", "reset", or "interrupt"
                             mode = (config.watchdog_mode or "").lower()
-                            if "halt" in mode:
-                                cmd = 3  # HALT_ONE_SHOT (or 4 for HALT_PERIODIC)
-                            elif "interrupt" in mode:
-                                cmd = 5  # INTERRUPT_ONE_SHOT (or 6 for INTERRUPT_PERIODIC)
-                            else:
-                                cmd = 1  # RESET_ONE_SHOT (or 2 for RESET_PERIODIC)
-                            
-                            # Upgrade to periodic if watchdog_periodic is true
-                            if config.watchdog_periodic:
-                                cmd += 1
-                            
+                            cmd = WD_CMD_HALT_ONE_SHOT
+                            periodic_upgrade = True
+                            if mode == "halt":
+                                cmd = WD_CMD_HALT_ONE_SHOT
+                            elif mode == "reset":
+                                cmd = WD_CMD_RESET_ONE_SHOT
+                            elif mode == "interrupt":
+                                cmd = WD_CMD_INTERRUPT_ONE_SHOT
+                            elif mode == "tick":
+                                cmd = WD_CMD_TICK_PERIODIC
+                                periodic_upgrade = False
+
+                            if config.watchdog_periodic and periodic_upgrade:
+                                if cmd == WD_CMD_HALT_ONE_SHOT:
+                                    cmd = WD_CMD_HALT_PERIODIC
+                                elif cmd == WD_CMD_RESET_ONE_SHOT:
+                                    cmd = WD_CMD_RESET_PERIODIC
+                                elif cmd == WD_CMD_INTERRUPT_ONE_SHOT:
+                                    cmd = WD_CMD_INTERRUPT_PERIODIC
+
                             control = ((cmd & 0x7) << 9) | (config.watchdog_default_count & 0x1FF)
                             execute_iot(lib, cpu, PDP8_WATCHDOG_IOT_BASE | PDP8_WATCHDOG_BIT_WRITE, ac=control)
                         
