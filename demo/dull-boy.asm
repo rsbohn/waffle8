@@ -29,7 +29,7 @@ PUTS_LOOP,
         JMP I PUTS              / Return when terminator reached
 PUTS_CHAR,
         JMS PUTCH               / Output character in AC
-        JMS SLOWLY              / Delay between characters for dramatic effect
+        /JMS SLOWLY              / Delay between characters for dramatic effect
         ISZ STR_PTR             / Advance pointer
         JMP PUTS_LOOP           / Continue until terminator
 
