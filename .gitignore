@@ -3,6 +3,7 @@
 *.so
 *.list
 *.gif
+*.rom
 *.swp
 .envrc
 unit
