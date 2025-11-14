@@ -684,21 +684,30 @@ static void wait_for_exit_prompt(const char *message) {
 
 int main(int argc, char **argv) {
     const char *startup_image = NULL;
+    const char *paper_tape_mount = NULL;
 
-    /* Argument parsing: handle --turbo flag and optional .srec file */
+    /* Argument parsing: handle --turbo flag, optional --mount path, and optional .srec file */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--turbo") == 0) {
             g_turbo_mode = true;
+        } else if (strcmp(argv[i], "--mount") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--mount requires a paper tape image path\n");
+                return EXIT_FAILURE;
+            }
+            paper_tape_mount = argv[i + 1];
+            ++i;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("PDP-8 Virtual Machine\n");
-            printf("Usage: %s [--turbo] [image.srec]\n", argv[0]);
-            printf("  --turbo    Run at 1000 Hz with no display (default: 10 Hz with ncurses)\n");
-            printf("  image.srec Optional S-record file to load and execute\n");
+            printf("Usage: %s [--turbo] [--mount <paper.tape>] [image.srec]\n", argv[0]);
+            printf("  --turbo        Run at 1000 Hz with no display (default: 10 Hz with ncurses)\n");
+            printf("  --mount PATH   Attach paper tape image at PATH to device 667x\n");
+            printf("  image.srec     Optional S-record file to load and execute\n");
             return EXIT_SUCCESS;
         } else if (startup_image == NULL) {
             startup_image = argv[i];
         } else {
-            fprintf(stderr, "Usage: %s [--turbo] [image.srec]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [--turbo] [--mount <paper.tape>] [image.srec]\n", argv[0]);
             fprintf(stderr, "Use --help for more information\n");
             return EXIT_FAILURE;
         }
@@ -748,6 +757,47 @@ int main(int argc, char **argv) {
         pdp8_line_printer_set_output_callback(runtime.printer,
                                               line_printer_output_callback,
                                               NULL);
+    }
+
+    const char *paper_tape_image = NULL;
+    bool paper_tape_from_config = false;
+    if (paper_tape_mount && *paper_tape_mount) {
+        paper_tape_image = paper_tape_mount;
+    } else if (config_loaded && runtime.config.paper_tape_present &&
+               runtime.config.paper_tape_image && *runtime.config.paper_tape_image) {
+        paper_tape_image = runtime.config.paper_tape_image;
+        paper_tape_from_config = true;
+    } else if (config_loaded && runtime.config.paper_tape_present) {
+        monitor_console_puts(
+            "Warning: paper tape requested in pdp8.config but no image path provided.");
+    }
+
+    if (paper_tape_image) {
+        runtime.paper_tape = pdp8_paper_tape_device_create();
+        if (!runtime.paper_tape) {
+            monitor_console_puts("Warning: unable to create paper tape device.");
+        } else if (pdp8_paper_tape_device_load(runtime.paper_tape, paper_tape_image) != 0) {
+            char msg[256];
+            snprintf(msg,
+                     sizeof msg,
+                     "Warning: unable to load paper tape image '%s'.",
+                     paper_tape_image);
+            monitor_console_puts(msg);
+            pdp8_paper_tape_device_destroy(runtime.paper_tape);
+            runtime.paper_tape = NULL;
+        } else if (pdp8_paper_tape_device_attach(runtime.cpu, runtime.paper_tape) != 0) {
+            monitor_console_puts("Warning: unable to attach paper tape device (IOT 667x).");
+            pdp8_paper_tape_device_destroy(runtime.paper_tape);
+            runtime.paper_tape = NULL;
+        } else {
+            char msg[256];
+            snprintf(msg,
+                     sizeof msg,
+                     "Paper tape mounted (%s): %s",
+                     paper_tape_from_config ? "pdp8.config" : "CLI",
+                     paper_tape_image);
+            monitor_console_puts(msg);
+        }
     }
 
     /* Show initial startup message */
