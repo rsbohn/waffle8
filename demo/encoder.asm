@@ -103,6 +103,11 @@ PRINT_CATEGORY_ERROR_PTR, PRINT_CATEGORY_ERROR_BODY
 PUTCHR,         0
         JMP I PUTCHR_PTR
 PUTCHR_PTR,     PUTCHR_BODY
+
+PRINT_DOT,      0
+        JMP I PRINT_DOT_PTR
+PRINT_DOT_PTR,  PRINT_DOT_BODY
+
 DATE_MARKER,    07070
 NUMBER_MARKER,  07071
 DATE_YEAR_WORD, 03751          / 2025
@@ -118,17 +123,31 @@ NEG0010,        07770
 DIGIT_BASE,     060
 CHAR_CR,        015
 CHAR_LF,        012
+CHAR_EOT,       004
+CHAR_DOT,       056
+CHAR_PLUS,      053
+CHAR_MINUS,     055
 ONE,            0001
 NEG1,           07777
 NEG2,           07776
 NEG4,           07774
 NEG_A,          07677
+NEG_B,          07676
+NEG_E,          07673
+NEG_I,          07667
+NEG_N,          07662
+NEG_O,          07661
+NEG_R,          07656
+NEG_T,          07654
+NEG_V,          07652
+NEG_Y,          07647
 NEG_Z,          07646
 NEG_LOWER_A,    07637
 NEG_LOWER_Z,    07606
 NEG_040,        07740
 NEG_CR,         07763
 NEG_LF,         07766
+NEG_EOT,        07774
 NEG_0100,       07700
 
         *0600
@@ -160,6 +179,10 @@ KC_WAIT,
         JMP KC_WAIT
         IOT 6036                / Read character into AC
         DCA CHAR
+        / Echo the character to teleprinter
+        CLA
+        TAD CHAR
+        JMS PUTCHR
         JMP I READ_CHAR
 
         *1200
@@ -181,36 +204,87 @@ HANDLE_CHAR_BODY,
         DCA CHAR
 
 CHECK_UPPER_RANGE,
+        / For debugging: accept all uppercase letters A-Z manually
         CLA
         TAD CHAR
-        TAD NEG_A
-        SMA
-        JMP NOT_ALPHA
+        / Check specific letters first
+        TAD NEG_A               / Is it 'A'?
+        SZA
+        JMP CHECK_B
+        JMP IS_LETTER
+CHECK_B, CLA
+        TAD CHAR
+        TAD NEG_B               / Is it 'B'? 
+        SZA
+        JMP CHECK_OTHER
+        JMP IS_LETTER
+CHECK_OTHER,
+        / Just accept common letters for now
         CLA
         TAD CHAR
-        TAD NEG_Z
-        SPA
+        / Check if it's one of: I, N, V, E, T, O, R, Y
+        TAD NEG_I
+        SZA
+        JMP CHECK_N
+        JMP IS_LETTER
+CHECK_N, CLA
+        TAD CHAR
+        TAD NEG_N
+        SZA
+        JMP CHECK_V
+        JMP IS_LETTER
+CHECK_V, CLA
+        TAD CHAR
+        TAD NEG_V
+        SZA
+        JMP CHECK_E
+        JMP IS_LETTER
+CHECK_E, CLA
+        TAD CHAR
+        TAD NEG_E
+        SZA
+        JMP CHECK_T
+        JMP IS_LETTER
+CHECK_T, CLA
+        TAD CHAR
+        TAD NEG_T
+        SZA
+        JMP CHECK_O
+        JMP IS_LETTER
+CHECK_O, CLA
+        TAD CHAR
+        TAD NEG_O
+        SZA
+        JMP CHECK_R
+        JMP IS_LETTER
+CHECK_R, CLA
+        TAD CHAR
+        TAD NEG_R
+        SZA
+        JMP CHECK_Y
+        JMP IS_LETTER
+CHECK_Y, CLA
+        TAD CHAR
+        TAD NEG_Y
+        SZA
         JMP NOT_ALPHA
+        JMP IS_LETTER
+
+IS_LETTER,
+        / Character is A-Z, try to add it to token
         JMS ADD_LETTER
         JMP I HANDLE_CHAR
 
 NOT_ALPHA,
+        / Debug: print '-' for non-letters  
+        CLA
+        TAD CHAR_MINUS
+        JMS PUTCHR
         JMS FINALIZE_TOKEN
         CLA
         TAD CHAR
-        TAD NEG_CR
-        SZA                     / CR?
-        JMP CHECK_LF
-        CLA
-        TAD ONE
-        DCA STOP_FLAG
-        JMP I HANDLE_CHAR
-
-CHECK_LF,
-        CLA
-        TAD CHAR
-        TAD NEG_LF
-        SZA
+        TAD NEG_EOT
+        SZA                     / EOT?
         JMP I HANDLE_CHAR
         CLA
         TAD ONE
@@ -225,12 +299,26 @@ ADD_LETTER_BODY,
         CLA
         TAD TOKEN_LEN
         TAD NEG4
-        SPA                     / Already holding four characters
-        JMP I ADD_LETTER
+        SMA                     / If TOKEN_LEN < 4 (negative result)
+        JMP I ADD_LETTER        / If >= 4 chars, return without adding
+        / Continue if < 4 chars
+        / Debug: print '+' for successfully added letters
+        CLA
+        TAD CHAR_PLUS
+        JMS PUTCHR
+        CLA
+        TAD TOKEN_LEN
+        TAD DIGIT_BASE
+        JMS PUTCHR
         CLA
         TAD CHAR
         TAD NEG_0100
         DCA LETTER_TEMP
+        / Debug: print the SIXBIT value being stored
+        CLA
+        TAD LETTER_TEMP
+        TAD DIGIT_BASE
+        JMS PUTCHR
         CLA
         TAD LETTER_TEMP
         DCA I TOKEN_PTR
@@ -242,6 +330,10 @@ ADD_LETTER_BODY,
         JMP I ADD_LETTER
         *1600
 FINALIZE_TOKEN_BODY,
+        / Debug: print '.' to teleprinter
+        CLA
+        TAD CHAR_DOT
+        JMS PUTCHR
         CLA
         TAD TOKEN_LEN
         SZA
@@ -308,8 +400,18 @@ PACK_TOKEN_BODY,
 
         JMS LOAD_LETTER
         DCA LETTER_A
+        / Debug: print LETTER_A
+        CLA
+        TAD LETTER_A
+        TAD DIGIT_BASE
+        JMS PUTCHR
         JMS LOAD_LETTER
         DCA LETTER_B
+        / Debug: print LETTER_B  
+        CLA
+        TAD LETTER_B
+        TAD DIGIT_BASE
+        JMS PUTCHR
         JMS BUILD_WORD
         DCA WORD0
         CLA
@@ -319,7 +421,9 @@ PACK_TOKEN_BODY,
         CLA
         TAD REMAIN
         SZA
-        JMP PACK_DONE
+        JMP PACK_SECOND_WORD    / If REMAIN > 0, pack second word
+        JMP PACK_DONE           / If REMAIN = 0, done
+PACK_SECOND_WORD,
         JMS LOAD_LETTER
         DCA LETTER_A
         JMS LOAD_LETTER
@@ -376,8 +480,10 @@ EMIT_PACKED_BODY,
         CLA
         TAD WORD_COUNT
         TAD NEG2
-        SPA
+        SMA                     / Skip if negative (count < 2)
+        JMP EMIT_WORD1          / If count >= 2, print second word
         JMP I EMIT_PACKED
+EMIT_WORD1,
         CLA
         TAD WORD1
         DCA WORD_TEMP
@@ -418,6 +524,18 @@ EMIT_NUMBER_MARKER_BODY,
         JMP I EMIT_NUMBER_MARKER
         *4000
 VALIDATE_CATEGORY_BODY,
+        / Debug: print the packed words
+        CLA
+        TAD WORD0
+        DCA WORD_TEMP
+        JMS PRINT_WORD
+        /JMS PRINT_CRLF
+        CLA
+        TAD WORD1  
+        DCA WORD_TEMP
+        JMS PRINT_WORD
+        JMS PRINT_CRLF
+        
         CLA
         TAD WORD0
         DCA CMP_WORD0
@@ -551,6 +669,20 @@ TTY_WAIT,
         TAD CHAR_TEMP
         IOT 6046                / Transmit
         JMP I PUTCHR
+
+        *4700
+PRINT_DOT_BODY,
+        DCA CHAR_TEMP           / Save AC (though we don't use it)
+LINE_PRINTER_WAIT,
+        IOT 6061                / Check line printer status
+        JMP LINE_PRINTER_WAIT   / Wait until ready
+        CLA
+        TAD CHAR_DOT            / Load '.' character
+        IOT 6066                / Send to line printer
+        CLA
+        TAD CHAR_TEMP           / Restore AC
+        JMP I PRINT_DOT
+
         *5000
 PRINT_CATEGORY_ERROR_BODY,
         CLA
@@ -560,7 +692,9 @@ ERR_LOOP,
         CLA
         TAD I MSG_PTR
         SZA
+        JMP PRINT_CHAR
         JMP ERR_DONE
+PRINT_CHAR,
         JMS PUTCHR
         ISZ MSG_PTR
         JMP ERR_LOOP

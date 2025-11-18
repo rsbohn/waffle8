@@ -12,5 +12,6 @@ __pycache__
 bin/*
 checkpoint/*
 magtape/*
+disk/*
 tests/pdp8_tests
 trace-args
