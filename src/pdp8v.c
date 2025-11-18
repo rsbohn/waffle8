@@ -34,11 +34,36 @@ static int console_row = 0;
 static int printer_row = 0;
 static bool g_paused = false;
 static bool g_turbo_mode = false;
+static double g_target_hz = 10.0;
+static struct timespec g_idle_period = {0, 100000000};
 
 /* Forward declarations */
 static void update_registers_display(struct pdp8v_runtime *runtime);
 static void update_watchdog_display(struct pdp8v_runtime *runtime);
 static void wait_for_exit_prompt(const char *message);
+static void pdp8v_set_frequency(double hz);
+
+static void pdp8v_set_frequency(double hz) {
+    if (hz <= 0.0) {
+        g_target_hz = 0.0;
+        g_idle_period.tv_sec = 0;
+        g_idle_period.tv_nsec = 0;
+        return;
+    }
+
+    g_target_hz = hz;
+    double period = 1.0 / hz;
+    time_t whole_seconds = (time_t)period;
+    double fractional = period - (double)whole_seconds;
+    long nanoseconds = (long)(fractional * 1000000000.0);
+
+    g_idle_period.tv_sec = whole_seconds;
+    g_idle_period.tv_nsec = nanoseconds;
+
+    if (g_idle_period.tv_sec == 0 && g_idle_period.tv_nsec <= 0) {
+        g_idle_period.tv_nsec = 1;  /* avoid zero-length sleep */
+    }
+}
 
 /* Minimal MD5 implementation for file checksums */
 typedef struct {
@@ -390,17 +415,11 @@ static void line_printer_output_callback(uint8_t ch, void *context) {
 
 
 
-/* Timing: 10Hz (100ms) in normal mode, 1000Hz (1ms) in turbo mode */
 static void pdp8v_idle(void) {
-    struct timespec req;
-    if (g_turbo_mode) {
-        req.tv_sec = 0;
-        req.tv_nsec = 1000000;  /* 1 millisecond for 1000Hz */
-    } else {
-        req.tv_sec = 0;
-        req.tv_nsec = 100000000;  /* 100 milliseconds for 10Hz */
+    if (g_idle_period.tv_sec == 0 && g_idle_period.tv_nsec == 0) {
+        return;
     }
-    nanosleep(&req, NULL);
+    nanosleep(&g_idle_period, NULL);
 }
 
 static int pdp8v_run_cycle_turbo(struct pdp8v_runtime *runtime) {
@@ -488,7 +507,7 @@ static void init_curses_display(const char *program_name) {
         werase(header_win);
         
         /* Title line */
-        mvwprintw(header_win, 0, 0, "PDP-8 Virtual Machine (10 Hz)");
+        mvwprintw(header_win, 0, 0, "PDP-8 Virtual Machine (%.0f Hz)", g_target_hz);
         if (program_name) {
             int name_pos = COLS - strlen(program_name) - 1;
             if (name_pos > 30) {  /* Ensure it doesn't overlap */
@@ -687,9 +706,12 @@ int main(int argc, char **argv) {
     const char *paper_tape_mount = NULL;
 
     /* Argument parsing: handle --turbo flag, optional --mount path, and optional .srec file */
+    pdp8v_set_frequency(10.0);
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--turbo") == 0) {
             g_turbo_mode = true;
+            pdp8v_set_frequency(1000.0);
         } else if (strcmp(argv[i], "--mount") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "--mount requires a paper tape image path\n");
@@ -697,17 +719,31 @@ int main(int argc, char **argv) {
             }
             paper_tape_mount = argv[i + 1];
             ++i;
+        } else if (strcmp(argv[i], "--hz") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--hz requires a numeric frequency\n");
+                return EXIT_FAILURE;
+            }
+            char *endptr = NULL;
+            double hz = strtod(argv[i + 1], &endptr);
+            if (endptr == argv[i + 1] || hz <= 0.0) {
+                fprintf(stderr, "Invalid frequency '%s' for --hz\n", argv[i + 1]);
+                return EXIT_FAILURE;
+            }
+            pdp8v_set_frequency(hz);
+            ++i;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("PDP-8 Virtual Machine\n");
-            printf("Usage: %s [--turbo] [--mount <paper.tape>] [image.srec]\n", argv[0]);
-            printf("  --turbo        Run at 1000 Hz with no display (default: 10 Hz with ncurses)\n");
+            printf("Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [image.srec]\n", argv[0]);
+            printf("  --turbo        Run headless at 1000 Hz (overrides --hz)\n");
+            printf("  --hz RATE      Set target frequency in Hz (default: 10)\n");
             printf("  --mount PATH   Attach paper tape image at PATH to device 667x\n");
             printf("  image.srec     Optional S-record file to load and execute\n");
             return EXIT_SUCCESS;
         } else if (startup_image == NULL) {
             startup_image = argv[i];
         } else {
-            fprintf(stderr, "Usage: %s [--turbo] [--mount <paper.tape>] [image.srec]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [image.srec]\n", argv[0]);
             fprintf(stderr, "Use --help for more information\n");
             return EXIT_FAILURE;
         }
@@ -740,7 +776,7 @@ int main(int argc, char **argv) {
         /* Force a screen refresh to ensure everything is visible */
         refresh();
     } else {
-        printf("PDP-8 Virtual Machine (Turbo Mode - 1000 Hz)\n");
+        printf("PDP-8 Virtual Machine (Turbo Mode - %.0f Hz)\n", g_target_hz);
         if (startup_image) {
             printf("Program: %s\n", startup_image);
         }
