@@ -1,0 +1,81 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Assemble PDP-8 File",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "tools/8asm.py",
+                "${file}",
+                "${fileDirname}/${fileBasenameNoExtension}.srec"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Assemble the current .asm file to .srec format"
+        },
+        {
+            "label": "Assemble PDP-8 File with Listing",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "tools/8asm.py",
+                "--list",
+                "${file}",
+                "${fileDirname}/${fileBasenameNoExtension}.srec"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Assemble the current .asm file to .srec format with assembly listing"
+        },
+        {
+            "label": "Run PDP-8 Program",
+            "type": "shell",
+            "command": "bin/monitor",
+            "args": [
+                "-c",
+                "${fileDirname}/${fileBasenameNoExtension}.srec"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Assemble PDP-8 File",
+            "problemMatcher": [],
+            "detail": "Assemble and run the current .asm file in the PDP-8 monitor"
+        }
+    ]
+}

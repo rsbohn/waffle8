@@ -49,6 +49,7 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
 ## Peripherals
 
 - Line printer peripheral sits on IOT device code `060`; use `6601` (skip if ready), `6602` (clear ready), and `6604` (print AC low 7 bits). Combine bits for multi-action sequences (`6606` for clear+print). Output goes to host stdout with a 132-column default width and CR/LF resetting the column counter.
+- Paper tape punch (device code `002`) mirrors the PC8/E high-speed punch: `6021` (`PSF`) skips when the punch is idle, `6022` (`PCF`) clears the ready flag, `6024` (`PLS`) latches (and immediately punches) the AC low byte, and `6026` (`PPC`) combines the latch with a flag clear. Attach it via the factory config (`device paper_tape_punch { output = tapes/ptp.out }`, add `enabled = false` to disable) or call `pdp8_paper_tape_punch_set_output_path` from a custom front end. A ready/busy poll loop that uses `PSF` before issuing `PPC` matches the sample program in `tapes/punch3.pa`.
 
 ## ROM Images
 

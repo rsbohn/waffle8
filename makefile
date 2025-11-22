@@ -13,6 +13,7 @@ MONITOR_OBJS = src/monitor.c \
 	src/emulator/interrupt_control.c \
         src/emulator/paper_tape.c \
         src/emulator/paper_tape_device.c \
+        src/emulator/paper_tape_punch.c \
         src/emulator/magtape_device.c
 
 PDP8V_OBJS = src/pdp8v.c \
@@ -27,6 +28,7 @@ PDP8V_OBJS = src/pdp8v.c \
 	src/emulator/interrupt_control.c \
         src/emulator/paper_tape.c \
         src/emulator/paper_tape_device.c \
+        src/emulator/paper_tape_punch.c \
         src/emulator/magtape_device.c
 
 PDP8_BENCH_OBJS = tools/pdp8_bench.c \
@@ -38,6 +40,7 @@ PDP8_BENCH_OBJS = tools/pdp8_bench.c \
 	src/emulator/interrupt_control.c \
 	src/emulator/paper_tape.c \
 	src/emulator/paper_tape_device.c \
+	src/emulator/paper_tape_punch.c \
 	src/emulator/magtape_device.c
 
 FACTORY_LIB = factory/libpdp8.so

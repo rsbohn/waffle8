@@ -11,6 +11,7 @@ void monitor_config_init(struct monitor_config *config) {
     }
     memset(config, 0, sizeof(*config));
     config->line_printer_column_limit = 132;
+    config->paper_tape_punch_enabled = true;
 }
 
 void monitor_config_clear(struct monitor_config *config) {
@@ -29,6 +30,7 @@ void monitor_config_clear(struct monitor_config *config) {
     free(config->line_printer_output);
     free(config->paper_tape_iot);
     free(config->paper_tape_image);
+    free(config->paper_tape_punch_output);
     free(config->watchdog_iot);
     free(config->watchdog_mode);
     monitor_config_init(config);

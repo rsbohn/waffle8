@@ -28,6 +28,8 @@ struct monitor_config {
     bool paper_tape_present;
     char *paper_tape_iot;
     char *paper_tape_image;
+    bool paper_tape_punch_enabled;
+    char *paper_tape_punch_output;
 
     /* Watchdog device configuration */
     bool watchdog_present;

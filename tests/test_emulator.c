@@ -16,6 +16,7 @@
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/paper_tape.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/emulator/paper_tape_punch.h"
 #include "../src/emulator/magtape_device.h"
 #include "../src/emulator/watchdog.h"
 #include <unistd.h>
@@ -910,6 +911,56 @@ static int test_paper_tape_device(void) {
     return 1;
 }
 
+static int test_paper_tape_punch_device(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("cpu created", cpu != NULL);
+
+    FILE *sink = tmpfile();
+    ASSERT_TRUE("punch sink", sink != NULL);
+
+    pdp8_paper_tape_punch_t *punch = pdp8_paper_tape_punch_create();
+    ASSERT_TRUE("punch created", punch != NULL);
+    ASSERT_INT_EQ("assign punch stream", 0, pdp8_paper_tape_punch_set_stream(punch, sink));
+    ASSERT_INT_EQ("punch attach", 0, pdp8_paper_tape_punch_attach(cpu, punch));
+
+    pdp8_api_write_mem(cpu, 0000, PDP8_PAPER_TAPE_PUNCH_PSF);
+    pdp8_api_write_mem(cpu, 0001, 07402);
+    pdp8_api_write_mem(cpu, 0002, PDP8_PAPER_TAPE_PUNCH_PCF);
+    pdp8_api_write_mem(cpu, 0003, PDP8_PAPER_TAPE_PUNCH_PSF);
+    pdp8_api_write_mem(cpu, 0004, 07200); /* CLA */
+    pdp8_api_write_mem(cpu, 0005, 01010); /* TAD 0010 */
+    pdp8_api_write_mem(cpu, 0006, PDP8_PAPER_TAPE_PUNCH_PPC);
+    pdp8_api_write_mem(cpu, 0007, 07402);
+    pdp8_api_write_mem(cpu, 0010, 00065); /* ASCII 'A' */
+
+    pdp8_api_set_pc(cpu, 0000);
+    ASSERT_INT_EQ("initial PSF executes", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("PSF skip when ready", 0002, pdp8_api_get_pc(cpu));
+
+    ASSERT_INT_EQ("PCF clears flag", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("PSF without ready", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("no skip when busy", 0004, pdp8_api_get_pc(cpu));
+
+    ASSERT_INT_EQ("CLA executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("TAD executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("PPC executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("halt executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("cpu halted", 1, pdp8_api_is_halted(cpu));
+
+    ASSERT_INT_EQ("byte recorded", 1, (int)pdp8_paper_tape_punch_bytes_written(punch));
+
+    fflush(sink);
+    fseek(sink, 0, SEEK_SET);
+    int recorded = fgetc(sink);
+    ASSERT_TRUE("byte present", recorded != EOF);
+    ASSERT_EQ("punch payload", 'A', recorded & 0xFF);
+
+    pdp8_paper_tape_punch_destroy(punch);
+    fclose(sink);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_board_spec(void) {
     const pdp8_board_spec *spec = pdp8_board_adafruit_fruit_jam();
     ASSERT_TRUE("Fruit Jam spec available", spec != NULL);
@@ -1089,6 +1140,7 @@ int main(int argc, char **argv) {
         //{"core fixture", test_demo_core_fixture},
         //{"paper tape parser", test_paper_tape_parser},
         //{"paper tape device", test_paper_tape_device},
+        {"paper tape punch device", test_paper_tape_punch_device},
         {"fruit jam board", test_board_spec},
         {"watchdog tick mode", test_watchdog_tick_mode},
         {"ion ioff", test_ion_ioff},
