@@ -30,7 +30,7 @@ if (wd->cmd == WD_CMD_INTERRUPT_ONE_SHOT || wd->cmd == WD_CMD_INTERRUPT_PERIODIC
 **Configuration** (pdp8.config):
 ```
 device watchdog {
-  mode = halt           # Can be "halt", "reset", or "interrupt"
+  mode = halt           # Can be "halt", "reset", "interrupt", or "tick"
   periodic = false      # If true, periodic mode (6) instead of one-shot (5)
   default_count = 5     # Timer value in deciseconds
 }
@@ -42,6 +42,12 @@ device watchdog {
 3. Program sets `watchdog.enabled = true`
 4. Program enables interrupts with ION
 5. When timer expires, CPU dispatches to ISR at 0x0010
+
+**Polled tick mode** (no HALT, no interrupt):
+1. Set `watchdog.mode = "tick"` and `watchdog.periodic = true`
+2. Program spins on `IOT 6551` (skip when flag latched)
+3. After the skip, issue `IOT 6554` to clear the flag and latch the next tick
+4. The CPU never HALTs, making it easy to measure wall-clock intervals or cadence loops
 
 **Test Program Pattern**:
 ```asm

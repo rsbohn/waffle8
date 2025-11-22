@@ -18,6 +18,7 @@
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/kl8e_console.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/emulator/paper_tape_punch.h"
 #include "../src/emulator/magtape_device.h"
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
@@ -207,6 +208,7 @@ struct monitor_runtime {
     pdp8_kl8e_console_t *console;
     pdp8_line_printer_t *printer;
     pdp8_paper_tape_device_t *paper_tape;
+    pdp8_paper_tape_punch_t *paper_tape_punch;
     pdp8_magtape_device_t *magtape;
     pdp8_watchdog_t *watchdog;
     struct monitor_config config;
@@ -277,9 +279,13 @@ static void monitor_console_puts(const char *text) {
 }
 
 
-static void show_devices(const struct monitor_config *config,
-                         bool config_loaded,
-                         const pdp8_paper_tape_device_t *paper_tape_device) {
+static void show_devices(const struct monitor_runtime *runtime) {
+    if (!runtime) {
+        return;
+    }
+    const struct monitor_config *config = &runtime->config;
+    bool config_loaded = runtime->config_loaded;
+    const pdp8_paper_tape_device_t *paper_tape_device = runtime->paper_tape;
     const char *keyboard_iot = (config && config->kl8e_keyboard_iot) ? config->kl8e_keyboard_iot : "603x";
     const char *keyboard_input = (config && config->kl8e_keyboard_input) ? config->kl8e_keyboard_input : "stdin";
     const char *teleprinter_iot =
@@ -300,6 +306,10 @@ static void show_devices(const struct monitor_config *config,
         (config && config->paper_tape_image) ? config->paper_tape_image : "(unconfigured)";
     const char *paper_tape_label =
         paper_tape_device ? pdp8_paper_tape_device_label(paper_tape_device) : NULL;
+
+    bool punch_enabled = (!config_loaded) || (config && config->paper_tape_punch_enabled);
+    const char *punch_output =
+        (config && config->paper_tape_punch_output) ? config->paper_tape_punch_output : "(discarded)";
 
     monitor_console_printf("Configuration source: %s\n",
                            config_loaded ? "pdp8.config" : "built-in defaults");
@@ -326,6 +336,10 @@ static void show_devices(const struct monitor_config *config,
         monitor_console_printf("    image            : %s\n", paper_tape_image);
         monitor_console_puts("    status           : (not attached)");
     }
+
+    monitor_console_puts("  Paper tape punch");
+    monitor_console_printf("    enabled          : %s\n", punch_enabled ? "yes" : "no");
+    monitor_console_printf("    output           : %s\n", punch_output);
 
     /* Watchdog device (configured via pdp8.config)
      * Print only when the watchdog stanza is present; otherwise show not-configured.
@@ -1364,7 +1378,7 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
     }
 
     if (strcmp(topic, "devices") == 0) {
-        show_devices(&runtime->config, runtime->config_loaded, runtime->paper_tape);
+        show_devices(runtime);
         return MONITOR_COMMAND_OK;
     }
 
@@ -1528,6 +1542,11 @@ static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
     if (runtime->paper_tape) {
         pdp8_paper_tape_device_destroy(runtime->paper_tape);
         runtime->paper_tape = NULL;
+    }
+
+    if (runtime->paper_tape_punch) {
+        pdp8_paper_tape_punch_destroy(runtime->paper_tape_punch);
+        runtime->paper_tape_punch = NULL;
     }
     if (runtime->printer) {
         pdp8_line_printer_destroy(runtime->printer);
@@ -1767,6 +1786,24 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         }
     }
 
+    if (!runtime->config_loaded || runtime->config.paper_tape_punch_enabled) {
+        runtime->paper_tape_punch = pdp8_paper_tape_punch_create();
+        if (!runtime->paper_tape_punch) {
+            monitor_console_puts("Warning: unable to create paper tape punch device.");
+        } else if (pdp8_paper_tape_punch_attach(runtime->cpu, runtime->paper_tape_punch) != 0) {
+            monitor_console_puts("Warning: unable to attach paper tape punch (IOT 602x).");
+            pdp8_paper_tape_punch_destroy(runtime->paper_tape_punch);
+            runtime->paper_tape_punch = NULL;
+        } else if (runtime->config.paper_tape_punch_output &&
+                   *runtime->config.paper_tape_punch_output) {
+            if (pdp8_paper_tape_punch_set_output_path(runtime->paper_tape_punch,
+                                                      runtime->config.paper_tape_punch_output) != 0) {
+                monitor_console_printf("Warning: unable to open paper tape punch output '%s'.\n",
+                                       runtime->config.paper_tape_punch_output);
+            }
+        }
+    }
+
     /* Watchdog: create and attach if present in config */
     if (runtime->config_loaded && runtime->config.watchdog_present && runtime->config.watchdog_enabled) {
         runtime->watchdog = pdp8_watchdog_create();
@@ -1779,22 +1816,26 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
         } else {
             /* Configure default mode/count by issuing a WRITE IOT if defaults provided */
             int cmd = 0;
+            bool cmd_allows_periodic_upgrade = true;
             if (runtime->config.watchdog_mode) {
                 if (strcasecmp(runtime->config.watchdog_mode, "halt") == 0) {
                     cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
                 } else if (strcasecmp(runtime->config.watchdog_mode, "reset") == 0) {
                     cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
                 } else if (strcasecmp(runtime->config.watchdog_mode, "interrupt") == 0) {
-                    /* interrupt mode not yet implemented; fallback to reset */
-                    cmd = PDP8_WD_CMD_RESET_ONE_SHOT;
+                    cmd = PDP8_WD_CMD_INTERRUPT_ONE_SHOT;
+                } else if (strcasecmp(runtime->config.watchdog_mode, "tick") == 0) {
+                    cmd = PDP8_WD_CMD_TICK_PERIODIC;
+                    cmd_allows_periodic_upgrade = false;
                 }
             } else {
                 /* default to halt */
                 cmd = PDP8_WD_CMD_HALT_ONE_SHOT;
             }
-            if (runtime->config.watchdog_periodic) {
+            if (runtime->config.watchdog_periodic && cmd_allows_periodic_upgrade) {
                 if (cmd == PDP8_WD_CMD_HALT_ONE_SHOT) cmd = PDP8_WD_CMD_HALT_PERIODIC;
                 else if (cmd == PDP8_WD_CMD_RESET_ONE_SHOT) cmd = PDP8_WD_CMD_RESET_PERIODIC;
+                else if (cmd == PDP8_WD_CMD_INTERRUPT_ONE_SHOT) cmd = PDP8_WD_CMD_INTERRUPT_PERIODIC;
             }
             int count = runtime->config.watchdog_default_count > 0 ? runtime->config.watchdog_default_count : 0;
             uint16_t control = (uint16_t)(((cmd & 0x7) << 9) | (count & 0x1FF));

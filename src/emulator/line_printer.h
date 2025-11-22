@@ -17,11 +17,16 @@ extern "C" {
 
 typedef struct pdp8_line_printer pdp8_line_printer_t;
 typedef struct pdp8 pdp8_t;
+typedef void (*pdp8_line_printer_output_callback)(uint8_t ch, void *context);
 
 pdp8_line_printer_t *pdp8_line_printer_create(FILE *stream);
 void pdp8_line_printer_destroy(pdp8_line_printer_t *printer);
 int pdp8_line_printer_attach(pdp8_t *cpu, pdp8_line_printer_t *printer);
 int pdp8_line_printer_set_column_limit(pdp8_line_printer_t *printer, uint16_t columns);
+int pdp8_line_printer_set_stream(pdp8_line_printer_t *printer, FILE *stream);
+int pdp8_line_printer_set_output_callback(pdp8_line_printer_t *printer,
+                                          pdp8_line_printer_output_callback callback,
+                                          void *context);
 
 #ifdef __cplusplus
 }

@@ -21,6 +21,10 @@ All PDP-8 instructions are 12 bits (octal 0000-7777):
 | 4xxx  | JMS      | Jump to Subroutine      | M[EA] ← PC; PC ← EA + 1               |
 | 5xxx  | JMP      | Jump                    | PC ← EA                               |
 
+*See “Programming Tips → Reading the `JMP` opcode family” in
+`docs/pdp8-programmer-guide.md` for a breakdown of the direct/indirect,
+page/current combinations for both `JMP` and `JMS`.*
+
 ### Address Modes
 - **Direct**: EA = address field (0-127 or 0-4095 depending on page bit)
 - **Indirect**: EA = M[address field] (bit 8 = 1)

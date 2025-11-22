@@ -16,6 +16,7 @@
 #define PDP8_OFFSET_MASK 0x007Fu   /* octal 00177 */
 #define PDP8_AUTO_INCREMENT_START 0x0008u /* octal 0010 */
 #define PDP8_AUTO_INCREMENT_END   0x000Fu /* octal 0017 */
+#define PDP8_WALL_CLOCK_ADDRESS   07760u  /* minutes since midnight */
 
 struct pdp8 {
     uint16_t *memory;
@@ -72,6 +73,33 @@ static uint16_t normalise_address(const pdp8_t *cpu, uint16_t address) {
         return 0;
     }
     return address % (uint16_t)cpu->memory_words;
+}
+
+static uint16_t read_wall_clock_minutes(void) {
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        return 0u;
+    }
+    struct tm tm_buf;
+    struct tm *local = localtime_r(&now, &tm_buf);
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+    if (!local) {
+        local = localtime(&now);
+    }
+#endif
+    if (!local) {
+        return 0u;
+    }
+    int minutes = local->tm_hour * 60 + local->tm_min;
+    return (uint16_t)(minutes & PDP8_WORD_MASK);
+}
+
+static uint16_t read_effective_word(const pdp8_t *cpu, uint16_t address) {
+    uint16_t normalised = normalise_address(cpu, address);
+    if (normalised == PDP8_WALL_CLOCK_ADDRESS) {
+        return read_wall_clock_minutes();
+    }
+    return cpu->memory[normalised] & PDP8_WORD_MASK;
 }
 
 static uint16_t fetch_effective_address(pdp8_t *cpu, uint16_t instruction) {
@@ -204,10 +232,10 @@ static void execute_memory_reference(pdp8_t *cpu, uint16_t instruction) {
 
     switch (opcode) {
     case 0x0000u: /* AND */
-        cpu->ac = mask_word(cpu->ac & cpu->memory[address]);
+        cpu->ac = mask_word(cpu->ac & read_effective_word(cpu, address));
         break;
     case 0x0200u: { /* TAD */
-        uint16_t value = cpu->memory[address];
+        uint16_t value = read_effective_word(cpu, address);
         uint16_t sum = cpu->ac + value;
         if (sum & 0x1000u) {
             cpu->link ^= 1u;
@@ -456,7 +484,7 @@ uint16_t pdp8_api_read_mem(const pdp8_t *cpu, uint16_t address) {
     if (!cpu || cpu->memory_words == 0) {
         return 0u;
     }
-    return cpu->memory[normalise_address(cpu, address)] & PDP8_WORD_MASK;
+    return read_effective_word(cpu, address);
 }
 
 int pdp8_api_load(pdp8_t *cpu, const uint16_t *words, size_t count, uint16_t start_address) {

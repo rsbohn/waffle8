@@ -9,6 +9,9 @@ with assembly programming and highlights the conventions baked into
 
 - **Word size:** 12-bit words, octal notation everywhere (`0oXXXX` implied).
 - **Memory map:** 4K words per field; the core ROM occupies addresses `6700–7777`.
+- **Wall clock:** Reading memory address `07760` yields the host's minutes-since-midnight
+  (local time, masked to 12 bits). Treat it as read-only; writes have no effect on
+  the reported value.
 - **Auto-increment registers:** Locations `0010–0017` **pre-increment** automatically
   when used indirectly. For string processing, initialize the pointer to 
   `string_address - 1` so the first access increments to the correct start.
@@ -19,6 +22,50 @@ with assembly programming and highlights the conventions baked into
   To load the **address itself**, define a constant (`BUF_ADDR, 0200`) and use
   `TAD BUF_ADDR`. This matters when initializing autoincrement pointers or
   computing addresses—see "Address Constants vs. Labels" below.
+
+## Programming Tips
+
+### Reading the `JMP` opcode family
+
+Opcode `5xxx` always performs a jump, but the `I` and `P` bits baked into the
+low byte change how the target address is formed. Decoding them quickly is
+useful when single-stepping dumps (`wonder`, monitor cores, etc.).
+
+| Range (octal) | Form                  | What happens                                                      | Why you’d use it                                  |
+|---------------|-----------------------|-------------------------------------------------------------------|---------------------------------------------------|
+| `5000–5177`   | `JMP addr`            | Direct jump within the current 128-word page                      | Short local branches without touching page zero   |
+| `5200–5377`   | `JMP addr` (page 0)   | Direct jump to page-zero offset                                   | Call tiny helper routines you’ve parked in page 0 |
+| `5400–5577`   | `JMP I addr`          | Pointer lookup on the current page, then jump anywhere            | Per-page jump tables or return vectors            |
+| `5600–5777`   | `JMP I addr` (page 0) | Pointer lookup in page zero, then jump anywhere                   | Global vectors: BIOS trampolines, ISRs, device tables |
+
+Key reminders:
+
+- `5200–5377` is the sweet spot for micro-routines that many modules call;
+  you skip the extra memory fetch required by indirect forms but still reach
+  them from any page.
+- `5400–5577` keeps both the instruction and its pointer on the same page, so
+  relocating that page preserves the table automatically.
+- `5600–5777` underpins the standard interrupt vector (`JMP I 0000` style),
+  BIOS jump tables (e.g., `JMS 0002` storing the return address, `JMP I 0002`
+  exiting), and any other global dispatch that multiple programs must share.
+- When carving out zero-page slots for the direct or indirect forms, avoid the
+  BIOS-reserved addresses listed later in this guide (0002–0007) and the
+  auto-increment registers (0010–0017).
+
+The exact same address decoding applies to `JMS` (`4xxx`) because it shares the
+memory-reference format. A quick mental map:
+
+- `4000–4177` — direct, current-page subroutine calls. Great for local helpers.
+- `4200–4377` — direct, page-zero calls. Lets you host shared subroutines in
+  page zero that any code can call without an extra pointer hop.
+- `4400–4577` — indirect, current-page. The pointer lives alongside the caller,
+  so relocating the page relocates the call targets.
+- `4600–4777` — indirect via page zero, mirroring `JMS I 0000` style jump tables.
+
+Operationally nothing else changes: the CPU still writes the return address to
+`EA`, then transfers to `EA+1` (after any indirection). Keeping the four ranges
+straight lets you mix and match `JMP`/`JMS` forms confidently when building
+dispatch tables or compact zero-page libraries.
 
 ## Toolchain Overview
 

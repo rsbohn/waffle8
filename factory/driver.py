@@ -20,7 +20,7 @@ RESET_VECTOR_ADDR = 0o0000
 RESET_POINTER_ADDR = 0o0020
 JMP_INDIRECT_20 = 0o5420  # JMP I 20, used as the reset vector
 DEFAULT_MEMORY_WORDS = 4096
-RUN_BLOCK_CYCLES = 10_000
+RUN_BLOCK_CYCLES = 8
 KL8E_BAUD = 110
 KL8E_BITS_PER_CHAR = 10
 KL8E_CHAR_PERIOD = KL8E_BITS_PER_CHAR / KL8E_BAUD if KL8E_BAUD > 0 else 0.0
@@ -31,6 +31,13 @@ PDP8_WATCHDOG_IOT_BASE = 0o6000 | ((PDP8_WATCHDOG_DEVICE_CODE & 0x3F) << 3)
 PDP8_WATCHDOG_BIT_WRITE = 0x1
 PDP8_WATCHDOG_BIT_READ = 0x2
 PDP8_WATCHDOG_BIT_RESTART = 0x4
+WD_CMD_HALT_ONE_SHOT = 3
+WD_CMD_HALT_PERIODIC = 4
+WD_CMD_RESET_ONE_SHOT = 1
+WD_CMD_RESET_PERIODIC = 2
+WD_CMD_INTERRUPT_ONE_SHOT = 5
+WD_CMD_INTERRUPT_PERIODIC = 6
+WD_CMD_TICK_PERIODIC = 7
 
 
 @dataclass
@@ -45,6 +52,8 @@ class DeviceConfig:
 
     paper_tape_present: bool = False
     paper_tape_image: Optional[str] = None
+    paper_tape_punch_enabled: bool = True
+    paper_tape_punch_output: Optional[str] = None
     # Watchdog device config
     watchdog_present: bool = False
     watchdog_enabled: bool = False
@@ -272,6 +281,19 @@ def configure_api(lib: ctypes.CDLL) -> None:
     lib.pdp8_paper_tape_device_label.argtypes = [ctypes.c_void_p]
     lib.pdp8_paper_tape_device_label.restype = ctypes.c_char_p
 
+    # Paper tape punch (device code 02)
+    lib.pdp8_paper_tape_punch_create.argtypes = []
+    lib.pdp8_paper_tape_punch_create.restype = ctypes.c_void_p
+
+    lib.pdp8_paper_tape_punch_destroy.argtypes = [ctypes.c_void_p]
+    lib.pdp8_paper_tape_punch_destroy.restype = None
+
+    lib.pdp8_paper_tape_punch_attach.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.pdp8_paper_tape_punch_attach.restype = ctypes.c_int
+
+    lib.pdp8_paper_tape_punch_set_output_path.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.pdp8_paper_tape_punch_set_output_path.restype = ctypes.c_int
+
     # Watchdog API (optional; may not be present in older builds)
     try:
         lib.pdp8_watchdog_create.argtypes = []
@@ -498,6 +520,12 @@ def load_device_config(path: Path) -> Tuple[DeviceConfig, bool]:
         elif current == "paper_tape":
             if key == "image":
                 config.paper_tape_image = value
+        elif current == "paper_tape_punch":
+            if key == "output":
+                config.paper_tape_punch_output = value
+            elif key == "enabled":
+                val = value.lower()
+                config.paper_tape_punch_enabled = val in ("1", "true", "yes", "on")
         elif current == "watchdog":
             if key == "enabled":
                 val = value.lower()
@@ -536,6 +564,7 @@ def main() -> int:
     printer = None
     console = None
     paper_tape_device = None
+    paper_tape_punch = None
     wd = None
     stdin_fd = -1
 
@@ -602,6 +631,30 @@ def main() -> int:
                         print(f"Paper tape attached: {image_path} (label {label}).")
         elif config.paper_tape_present:
             print("Warning: paper_tape device configured without an image path.", file=sys.stderr)
+        if config.paper_tape_punch_enabled:
+            paper_tape_punch = lib.pdp8_paper_tape_punch_create()
+            if not paper_tape_punch:
+                print("Warning: failed to create paper tape punch device.", file=sys.stderr)
+                paper_tape_punch = None
+            elif lib.pdp8_paper_tape_punch_attach(cpu, paper_tape_punch) != 0:
+                print("Warning: failed to attach paper tape punch device.", file=sys.stderr)
+                lib.pdp8_paper_tape_punch_destroy(paper_tape_punch)
+                paper_tape_punch = None
+            else:
+                destination = config.paper_tape_punch_output
+                if destination:
+                    result = lib.pdp8_paper_tape_punch_set_output_path(
+                        paper_tape_punch, destination.encode("utf-8")
+                    )
+                    if result != 0:
+                        print(
+                            f"Warning: unable to open paper tape punch output '{destination}'.",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(f"Paper tape punch output: {destination}")
+                else:
+                    print("Paper tape punch enabled (output disabled on host).")
 
         # If the watchdog is configured for the factory driver, create and attach it
         wd = None
@@ -619,19 +672,27 @@ def main() -> int:
                     else:
                         # Initialize the watchdog control register via IOT if a default count was provided
                         if config.watchdog_default_count > 0:
-                            # Parse watchdog mode: "halt", "reset", or "interrupt"
                             mode = (config.watchdog_mode or "").lower()
-                            if "halt" in mode:
-                                cmd = 3  # HALT_ONE_SHOT (or 4 for HALT_PERIODIC)
-                            elif "interrupt" in mode:
-                                cmd = 5  # INTERRUPT_ONE_SHOT (or 6 for INTERRUPT_PERIODIC)
-                            else:
-                                cmd = 1  # RESET_ONE_SHOT (or 2 for RESET_PERIODIC)
-                            
-                            # Upgrade to periodic if watchdog_periodic is true
-                            if config.watchdog_periodic:
-                                cmd += 1
-                            
+                            cmd = WD_CMD_HALT_ONE_SHOT
+                            periodic_upgrade = True
+                            if mode == "halt":
+                                cmd = WD_CMD_HALT_ONE_SHOT
+                            elif mode == "reset":
+                                cmd = WD_CMD_RESET_ONE_SHOT
+                            elif mode == "interrupt":
+                                cmd = WD_CMD_INTERRUPT_ONE_SHOT
+                            elif mode == "tick":
+                                cmd = WD_CMD_TICK_PERIODIC
+                                periodic_upgrade = False
+
+                            if config.watchdog_periodic and periodic_upgrade:
+                                if cmd == WD_CMD_HALT_ONE_SHOT:
+                                    cmd = WD_CMD_HALT_PERIODIC
+                                elif cmd == WD_CMD_RESET_ONE_SHOT:
+                                    cmd = WD_CMD_RESET_PERIODIC
+                                elif cmd == WD_CMD_INTERRUPT_ONE_SHOT:
+                                    cmd = WD_CMD_INTERRUPT_PERIODIC
+
                             control = ((cmd & 0x7) << 9) | (config.watchdog_default_count & 0x1FF)
                             execute_iot(lib, cpu, PDP8_WATCHDOG_IOT_BASE | PDP8_WATCHDOG_BIT_WRITE, ac=control)
             except Exception as exc:
@@ -688,6 +749,8 @@ def main() -> int:
             lib.pdp8_line_printer_destroy(printer)
         if paper_tape_device:
             lib.pdp8_paper_tape_device_destroy(paper_tape_device)
+        if paper_tape_punch:
+            lib.pdp8_paper_tape_punch_destroy(paper_tape_punch)
         if wd:
             try:
                 if hasattr(lib, "pdp8_watchdog_destroy"):

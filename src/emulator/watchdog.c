@@ -11,15 +11,14 @@
 #define WATCHDOG_COUNT_MASK 0x01FFu
 #define WATCHDOG_CMD_MASK 0x0E00u
 
-enum watchdog_cmd {
-    WD_CMD_DISABLE = 0,
-    WD_CMD_RESET_ONE_SHOT = 1,
-    WD_CMD_RESET_PERIODIC = 2,
-    WD_CMD_HALT_ONE_SHOT = 3,
-    WD_CMD_HALT_PERIODIC = 4,
-    WD_CMD_INTERRUPT_ONE_SHOT = 5,
-    WD_CMD_INTERRUPT_PERIODIC = 6,
-};
+#define WD_CMD_DISABLE PDP8_WD_CMD_DISABLE
+#define WD_CMD_RESET_ONE_SHOT PDP8_WD_CMD_RESET_ONE_SHOT
+#define WD_CMD_RESET_PERIODIC PDP8_WD_CMD_RESET_PERIODIC
+#define WD_CMD_HALT_ONE_SHOT PDP8_WD_CMD_HALT_ONE_SHOT
+#define WD_CMD_HALT_PERIODIC PDP8_WD_CMD_HALT_PERIODIC
+#define WD_CMD_INTERRUPT_ONE_SHOT PDP8_WD_CMD_INTERRUPT_ONE_SHOT
+#define WD_CMD_INTERRUPT_PERIODIC PDP8_WD_CMD_INTERRUPT_PERIODIC
+#define WD_CMD_TICK_PERIODIC PDP8_WD_CMD_TICK_PERIODIC
 
 struct pdp8_watchdog {
     uint16_t configured_count; /* in deciseconds, 9 bits */
@@ -28,6 +27,15 @@ struct pdp8_watchdog {
     int expired;
     uint64_t expiry_ns; /* monotonic time in ns */
 };
+
+static int watchdog_cmd_is_periodic(uint8_t cmd) {
+    return (cmd == WD_CMD_RESET_PERIODIC || cmd == WD_CMD_HALT_PERIODIC ||
+            cmd == WD_CMD_INTERRUPT_PERIODIC || cmd == WD_CMD_TICK_PERIODIC);
+}
+
+static int watchdog_cmd_latches_flag(uint8_t cmd) {
+    return cmd == WD_CMD_TICK_PERIODIC;
+}
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -40,8 +48,7 @@ static uint64_t now_ns(void) {
 static void watchdog_fire(pdp8_t *cpu, pdp8_watchdog_t *wd) {
     if (!cpu || !wd) return;
     wd->expired = 1;
-    wd->enabled = (wd->cmd == WD_CMD_RESET_PERIODIC || wd->cmd == WD_CMD_HALT_PERIODIC || 
-                   wd->cmd == WD_CMD_INTERRUPT_PERIODIC) ? 1 : 0;
+    wd->enabled = watchdog_cmd_is_periodic(wd->cmd) ? 1 : 0;
     /* action based on cmd */
     if (wd->cmd == WD_CMD_RESET_ONE_SHOT || wd->cmd == WD_CMD_RESET_PERIODIC) {
         /* Jump to reset vector 0000 */
@@ -52,6 +59,8 @@ static void watchdog_fire(pdp8_t *cpu, pdp8_watchdog_t *wd) {
     } else if (wd->cmd == WD_CMD_INTERRUPT_ONE_SHOT || wd->cmd == WD_CMD_INTERRUPT_PERIODIC) {
         /* Request interrupt via ISR polling */
         pdp8_api_request_interrupt(cpu, PDP8_WATCHDOG_DEVICE_CODE);
+    } else if (wd->cmd == WD_CMD_TICK_PERIODIC) {
+        /* Flag-only periodic tick: no automatic CPU control */
     }
     /* for periodic modes, expiry will be reloaded by tick handler */
 }
@@ -67,13 +76,15 @@ static void watchdog_tick(pdp8_t *cpu, void *context, uint64_t now) {
         }
         return;
     }
-    if (now >= wd->expiry_ns && !wd->expired) {
+    if (now >= wd->expiry_ns) {
         watchdog_fire(cpu, wd);
         if (wd->enabled) {
             /* periodic: schedule next expiry */
             uint64_t delta_ns = (uint64_t)wd->configured_count * 100000000ull; /* deciseconds -> ns */
             wd->expiry_ns = now + delta_ns;
-            wd->expired = 0; /* still active until next fire */
+            if (!watchdog_cmd_latches_flag(wd->cmd)) {
+                wd->expired = 0; /* still active until next fire */
+            }
         }
     }
 }

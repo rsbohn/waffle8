@@ -11,6 +11,7 @@ extern "C" {
 
 typedef struct pdp8 pdp8_t;
 typedef struct pdp8_kl8e_console pdp8_kl8e_console_t;
+typedef void (*pdp8_kl8e_console_output_callback)(uint8_t ch, void *context);
 
 #define PDP8_KL8E_KEYBOARD_DEVICE_CODE 003u
 #define PDP8_KL8E_TELEPRINTER_DEVICE_CODE 004u
@@ -35,6 +36,10 @@ size_t pdp8_kl8e_console_input_pending(const pdp8_kl8e_console_t *console);
 size_t pdp8_kl8e_console_output_pending(const pdp8_kl8e_console_t *console);
 int pdp8_kl8e_console_pop_output(pdp8_kl8e_console_t *console, uint8_t *ch);
 int pdp8_kl8e_console_flush(pdp8_kl8e_console_t *console);
+int pdp8_kl8e_console_set_output_stream(pdp8_kl8e_console_t *console, FILE *stream);
+int pdp8_kl8e_console_set_output_callback(pdp8_kl8e_console_t *console,
+                                          pdp8_kl8e_console_output_callback callback,
+                                          void *context);
 
 #ifdef __cplusplus
 }

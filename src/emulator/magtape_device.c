@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,6 +16,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #define MAGTAPE_SENTINEL_WORD 0xFFFFu
 #define MAGTAPE_STATUS_READY 0x0001u
@@ -226,6 +228,64 @@ static int compare_records(const void *lhs, const void *rhs) {
         return 1;
     }
     return strcmp(a->name, b->name);
+}
+
+static bool parse_octal_record_index(const char *name, unsigned *out_index) {
+    if (!name) {
+        return false;
+    }
+    if (!ends_with_case_insensitive(name, ".tap")) {
+        return false;
+    }
+    size_t len = strlen(name);
+    size_t suffix_len = 4u; /* ".tap" */
+    if (len <= suffix_len) {
+        return false;
+    }
+    size_t digits = len - suffix_len;
+    if (digits < 4u) {
+        return false;
+    }
+    unsigned long value = 0ul;
+    for (size_t i = 0; i < digits; ++i) {
+        char c = name[i];
+        if (c < '0' || c > '7') {
+            return false;
+        }
+        value = (value << 3) | (unsigned long)(c - '0');
+        if (value > UINT_MAX) {
+            errno = ERANGE;
+            return false;
+        }
+    }
+    if (out_index) {
+        *out_index = (unsigned)value;
+    }
+    return true;
+}
+
+static size_t octal_digit_count(unsigned value) {
+    size_t digits = 1u;
+    while (value >= 8u) {
+        value >>= 3;
+        digits++;
+    }
+    return digits;
+}
+
+static int format_record_filename(unsigned index, char *buffer, size_t buffer_len) {
+    if (!buffer || buffer_len == 0u) {
+        return -1;
+    }
+    size_t digits = octal_digit_count(index);
+    if (digits < 4u) {
+        digits = 4u;
+    }
+    int written = snprintf(buffer, buffer_len, "%0*o.tap", (int)digits, index);
+    if (written < 0 || (size_t)written >= buffer_len) {
+        return -1;
+    }
+    return 0;
 }
 
 static int append_record(struct magtape_unit *unit, const struct magtape_record *record) {
@@ -614,34 +674,69 @@ static int ensure_write_stream(struct magtape_unit *unit) {
         return 0;
     }
 
-    time_t now = time(NULL);
-    struct tm tm_buf;
-    struct tm *tm_info = localtime_r(&now, &tm_buf);
-    if (!tm_info) {
+    DIR *dir = opendir(unit->path);
+    if (!dir) {
         return -1;
     }
 
-    char timestamp[32];
-    strftime(timestamp, sizeof timestamp, "record-%Y%m%d-%H%M%S", tm_info);
+    unsigned next_index = 0u;
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        unsigned parsed = 0u;
+        if (parse_octal_record_index(entry->d_name, &parsed)) {
+            if (parsed == UINT_MAX) {
+                closedir(dir);
+                errno = ERANGE;
+                return -1;
+            }
+            if (parsed >= next_index) {
+                next_index = parsed + 1u;
+            }
+        }
+    }
+    closedir(dir);
 
-    char candidate[64];
-    int attempt = 0;
     FILE *fp = NULL;
     char *full_path = NULL;
-    do {
-        if (attempt == 0) {
-            snprintf(candidate, sizeof candidate, "%s.tap", timestamp);
-        } else {
-            snprintf(candidate, sizeof candidate, "%s-%03d.tap", timestamp, attempt);
+    char candidate[32];
+    unsigned candidate_index = next_index;
+    unsigned attempts = 0u;
+    while (attempts < 1024u) {
+        if (format_record_filename(candidate_index, candidate, sizeof candidate) != 0) {
+            free(full_path);
+            return -1;
         }
         free(full_path);
         full_path = join_path(unit->path, candidate);
         if (!full_path) {
             return -1;
         }
-        fp = fopen(full_path, "wb");
-        attempt++;
-    } while (!fp && attempt < 1000);
+        int fd = open(full_path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd < 0) {
+            if (errno == EEXIST) {
+                if (candidate_index == UINT_MAX) {
+                    free(full_path);
+                    return -1;
+                }
+                candidate_index++;
+                attempts++;
+                continue;
+            }
+            free(full_path);
+            return -1;
+        }
+        fp = fdopen(fd, "wb");
+        if (!fp) {
+            close(fd);
+            remove(full_path);
+            free(full_path);
+            return -1;
+        }
+        break;
+    }
 
     if (!fp) {
         free(full_path);

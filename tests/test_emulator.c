@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,6 +8,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
@@ -13,7 +16,9 @@
 #include "../src/emulator/line_printer.h"
 #include "../src/emulator/paper_tape.h"
 #include "../src/emulator/paper_tape_device.h"
+#include "../src/emulator/paper_tape_punch.h"
 #include "../src/emulator/magtape_device.h"
+#include "../src/emulator/watchdog.h"
 #include <unistd.h>
 
 #define ASSERT_EQ(label, expected, actual)                                                             \
@@ -52,6 +57,37 @@
             return 0;                                                                                  \
         }                                                                                              \
     } while (0)
+
+static uint16_t minutes_from_time(time_t value) {
+    if (value == (time_t)-1) {
+        return 0u;
+    }
+    struct tm tm_buf;
+    struct tm *local = localtime_r(&value, &tm_buf);
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+    if (!local) {
+        local = localtime(&value);
+    }
+#endif
+    if (!local) {
+        return 0u;
+    }
+    int minutes = local->tm_hour * 60 + local->tm_min;
+    return (uint16_t)(minutes & 0x0FFFu);
+}
+
+static bool minute_matches(uint16_t observed, time_t before, time_t after) {
+    uint16_t before_minutes = minutes_from_time(before);
+    uint16_t after_minutes = minutes_from_time(after);
+    if (observed == before_minutes || observed == after_minutes) {
+        return true;
+    }
+    /* Handle rare rollover where before is 23:59 and after is 00:00 but observed captured between */
+    if ((before_minutes == 1439u && observed == 0u) || (after_minutes == 0u && observed == 1439u)) {
+        return true;
+    }
+    return false;
+}
 
 static int load_srec_into_cpu(pdp8_t *cpu,
                               const char *path,
@@ -292,9 +328,9 @@ static int test_memory_reference(void) {
 
 static int test_indirect_and_auto_increment(void) {
     pdp8_t *cpu = pdp8_api_create(4096);
-    if (!cpu) {
-        return 0;
-    }
+   if (!cpu) {
+       return 0;
+   }
 
     pdp8_api_write_mem(cpu, 0000, 01010 | 00400); /* TAD I 0010 */
     pdp8_api_write_mem(cpu, 0001, 07402);
@@ -305,6 +341,35 @@ static int test_indirect_and_auto_increment(void) {
     pdp8_api_step(cpu);
     ASSERT_EQ("Indirect fetch", 00005, pdp8_api_get_ac(cpu));
     ASSERT_EQ("Auto-increment", 00021, pdp8_api_read_mem(cpu, 0010));
+
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_wall_clock_device(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    if (!cpu) {
+        return 0;
+    }
+
+    time_t before = time(NULL);
+    uint16_t direct_value = pdp8_api_read_mem(cpu, 07760);
+    time_t after = time(NULL);
+    ASSERT_TRUE("wall clock API read matches host minutes",
+                minute_matches(direct_value, before, after));
+
+    pdp8_api_write_mem(cpu, 0000, 01020 | 00400); /* TAD I 0020 */
+    pdp8_api_write_mem(cpu, 0001, 07402);         /* HLT */
+    pdp8_api_write_mem(cpu, 0020, 07760);         /* pointer to wall clock */
+    pdp8_api_set_ac(cpu, 0);
+    pdp8_api_set_pc(cpu, 0);
+
+    time_t before_exec = time(NULL);
+    ASSERT_INT_EQ("execute TAD I wall clock", 1, pdp8_api_step(cpu));
+    uint16_t ac_value = pdp8_api_get_ac(cpu);
+    time_t after_exec = time(NULL);
+    ASSERT_TRUE("wall clock read via instruction matches host minutes",
+                minute_matches(ac_value, before_exec, after_exec));
 
     pdp8_api_destroy(cpu);
     return 1;
@@ -846,6 +911,56 @@ static int test_paper_tape_device(void) {
     return 1;
 }
 
+static int test_paper_tape_punch_device(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("cpu created", cpu != NULL);
+
+    FILE *sink = tmpfile();
+    ASSERT_TRUE("punch sink", sink != NULL);
+
+    pdp8_paper_tape_punch_t *punch = pdp8_paper_tape_punch_create();
+    ASSERT_TRUE("punch created", punch != NULL);
+    ASSERT_INT_EQ("assign punch stream", 0, pdp8_paper_tape_punch_set_stream(punch, sink));
+    ASSERT_INT_EQ("punch attach", 0, pdp8_paper_tape_punch_attach(cpu, punch));
+
+    pdp8_api_write_mem(cpu, 0000, PDP8_PAPER_TAPE_PUNCH_PSF);
+    pdp8_api_write_mem(cpu, 0001, 07402);
+    pdp8_api_write_mem(cpu, 0002, PDP8_PAPER_TAPE_PUNCH_PCF);
+    pdp8_api_write_mem(cpu, 0003, PDP8_PAPER_TAPE_PUNCH_PSF);
+    pdp8_api_write_mem(cpu, 0004, 07200); /* CLA */
+    pdp8_api_write_mem(cpu, 0005, 01010); /* TAD 0010 */
+    pdp8_api_write_mem(cpu, 0006, PDP8_PAPER_TAPE_PUNCH_PPC);
+    pdp8_api_write_mem(cpu, 0007, 07402);
+    pdp8_api_write_mem(cpu, 0010, 00065); /* ASCII 'A' */
+
+    pdp8_api_set_pc(cpu, 0000);
+    ASSERT_INT_EQ("initial PSF executes", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("PSF skip when ready", 0002, pdp8_api_get_pc(cpu));
+
+    ASSERT_INT_EQ("PCF clears flag", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("PSF without ready", 1, pdp8_api_step(cpu));
+    ASSERT_EQ("no skip when busy", 0004, pdp8_api_get_pc(cpu));
+
+    ASSERT_INT_EQ("CLA executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("TAD executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("PPC executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("halt executed", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("cpu halted", 1, pdp8_api_is_halted(cpu));
+
+    ASSERT_INT_EQ("byte recorded", 1, (int)pdp8_paper_tape_punch_bytes_written(punch));
+
+    fflush(sink);
+    fseek(sink, 0, SEEK_SET);
+    int recorded = fgetc(sink);
+    ASSERT_TRUE("byte present", recorded != EOF);
+    ASSERT_EQ("punch payload", 'A', recorded & 0xFF);
+
+    pdp8_paper_tape_punch_destroy(punch);
+    fclose(sink);
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
 static int test_board_spec(void) {
     const pdp8_board_spec *spec = pdp8_board_adafruit_fruit_jam();
     ASSERT_TRUE("Fruit Jam spec available", spec != NULL);
@@ -860,6 +975,48 @@ static int test_board_spec(void) {
     ASSERT_EQ("Write last word", 0, pdp8_api_write_mem(cpu, (uint16_t)(spec->memory_words - 1u), 01234));
     ASSERT_EQ("Read last word", 01234, pdp8_api_read_mem(cpu, (uint16_t)(spec->memory_words - 1u)));
 
+    pdp8_api_destroy(cpu);
+    return 1;
+}
+
+static int test_watchdog_tick_mode(void) {
+    pdp8_t *cpu = pdp8_api_create(4096);
+    ASSERT_TRUE("CPU created", cpu != NULL);
+
+    pdp8_watchdog_t *wd = pdp8_watchdog_create();
+    ASSERT_TRUE("watchdog created", wd != NULL);
+    ASSERT_INT_EQ("attach watchdog", 0, pdp8_watchdog_attach(cpu, wd));
+
+    uint16_t control = (uint16_t)((PDP8_WD_CMD_TICK_PERIODIC & 0x7) << 9);
+    control |= 0001; /* 1 decisecond */
+    pdp8_api_set_ac(cpu, control);
+    pdp8_api_write_mem(cpu, 0, PDP8_WATCHDOG_WRITE);
+    pdp8_api_set_pc(cpu, 0);
+    ASSERT_INT_EQ("write control", 1, pdp8_api_step(cpu));
+
+    struct pdp8_watchdog_status status;
+    bool tick_observed = false;
+    for (int i = 0; i < 200; ++i) {
+        pdp8_api_step(cpu);
+        ASSERT_INT_EQ("status", 0, pdp8_watchdog_get_status(wd, &status));
+        if (status.expired) {
+            tick_observed = true;
+            break;
+        }
+        struct timespec req = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
+        nanosleep(&req, NULL);
+    }
+    ASSERT_TRUE("tick latched", tick_observed);
+    ASSERT_INT_EQ("cpu not halted", 0, pdp8_api_is_halted(cpu));
+
+    /* clear flag via RESTART */
+    pdp8_api_write_mem(cpu, 0, PDP8_WATCHDOG_RESTART);
+    pdp8_api_set_pc(cpu, 0);
+    ASSERT_INT_EQ("restart", 1, pdp8_api_step(cpu));
+    ASSERT_INT_EQ("status", 0, pdp8_watchdog_get_status(wd, &status));
+    ASSERT_INT_EQ("flag cleared", 0, status.expired);
+
+    pdp8_watchdog_destroy(wd);
     pdp8_api_destroy(cpu);
     return 1;
 }
@@ -972,6 +1129,7 @@ int main(int argc, char **argv) {
     } tests[] = {
         {"memory reference", test_memory_reference},
         {"indirect", test_indirect_and_auto_increment},
+        {"wall clock", test_wall_clock_device},
         {"operate group 1", test_operate_group1},
         {"operate group 2", test_operate_group2},
         {"iot", test_iot},
@@ -982,7 +1140,9 @@ int main(int argc, char **argv) {
         //{"core fixture", test_demo_core_fixture},
         //{"paper tape parser", test_paper_tape_parser},
         //{"paper tape device", test_paper_tape_device},
+        {"paper tape punch device", test_paper_tape_punch_device},
         {"fruit jam board", test_board_spec},
+        {"watchdog tick mode", test_watchdog_tick_mode},
         {"ion ioff", test_ion_ioff},
         {"interrupt pending count", test_interrupt_pending_count},
         {"interrupt dispatch", test_interrupt_dispatch},
