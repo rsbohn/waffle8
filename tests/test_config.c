@@ -77,6 +77,17 @@ int main(void) {
         return 8;
     }
 
+    if (!config.paper_tape_punch_enabled) {
+        fprintf(stderr, "paper_tape_punch_enabled not set\n");
+        monitor_platform_shutdown();
+        return 9;
+    }
+    if (!config.paper_tape_punch_output || config.paper_tape_punch_output[0] == '\0') {
+        fprintf(stderr, "paper_tape_punch_output missing\n");
+        monitor_platform_shutdown();
+        return 9;
+    }
+
     printf("config test OK\n");
     monitor_platform_shutdown();
     /* clear config memory */

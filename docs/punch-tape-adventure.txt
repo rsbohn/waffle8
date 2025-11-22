@@ -1,0 +1,199 @@
+PAPER TAPE PUNCH ADVENTURE - PDP-8 PAL8 Assembly
+================================================
+Date: November 21, 2025
+System: SIMH PDP-8 Simulator
+Goal: Create a program to punch data to paper tape
+
+THE CHALLENGE
+-------------
+Write a PAL8 assembly program to fill a block of memory (256 words) with
+zeros and output to paper tape punch (PTP).
+
+INITIAL APPROACH - Memory Fill
+-------------------------------
+First attempt: Fill memory locations 7400-7777 with zeros.
+
+    *0020
+    7400            / Counter: -0400 octal = -256 decimal
+    
+    *0030
+    LOOP, CLA       / Clear AC
+          DCA I 0020 / Deposit and clear, indirect through counter
+          ISZ 0020   / Increment counter, skip if zero
+          JMP LOOP   / Loop back
+          HLT        / Done
+
+Result: Works! 1024 instructions (4 per iteration × 256 iterations)
+Issue: 7400-7777 range conflicts with OS/8 memory usage.
+
+REVISED APPROACH - Direct to PTP
+---------------------------------
+Solution: Write directly to paper tape punch, reducing memory footprint.
+
+Device Configuration (from SIMH):
+    PTP     devno=02    (High-speed paper tape punch)
+
+IOT Instructions for Device 02:
+    6021 = PSF (Punch Skip if Flag - ready check)
+    6022 = PCF (Punch Clear Flag)
+    6024 = PLS (Punch Load Sequence)
+    6026 = PPC (Punch Put Character)
+
+PROGRAM EVOLUTION
+-----------------
+
+Version 1: Simple punch without ready check
+    *0020
+    7400            / Counter: -256
+    
+    *0030
+    LOOP, CLA       / Clear AC
+          PPC       / 6026 - Punch character
+          ISZ 0020  / Increment counter
+          JMP LOOP  / Loop
+          HLT
+
+Result: Only 9 bytes punched! 
+Problem: Not checking if punch device is ready.
+
+Version 2: Added ready-bit wait loop
+    *0030
+    LOOP, CLA       / Clear AC
+          PSF       / 6021 - Skip if punch ready
+          JMP .-1   / Wait until ready
+          PPC       / 6026 - Punch character
+          ISZ 0020  / Increment counter
+          JMP LOOP  / Loop
+          HLT
+
+Better! But had off-by-one issues...
+
+COUNTER VALUE EXPERIMENTS
+--------------------------
+Testing different counter starting values:
+
+Counter 7400 (-256): Produced 255 bytes (off by 1)
+Counter 7377 (-257): Produced 257 bytes (off by 1 the other way)
+Counter 7200 (-384): Produced 384 bytes (correct!)
+
+Lesson: ISZ increments THEN tests for zero, and we punch BEFORE the ISZ.
+Starting at N gives us (7777 - N + 1) punches.
+
+FINAL VERSION - Counting Pattern
+---------------------------------
+Instead of punching zeros, punch the counter value (masked to 6 bits):
+
+    *0020
+    7200            / Counter (adjustable)
+    *0021
+    0077            / Mask (6 bits = 0-77 octal)
+    
+    *0030
+    LOOP, CLA       / Clear AC
+          PSF       / 6021 - Wait for punch ready
+          JMP .-1   / Loop until ready
+          TAD 0020  / Load counter value
+          AND 0021  / Mask to 6 bits (0-77)
+          PPC       / 6026 - Punch character
+          ISZ 0020  / Increment counter
+          JMP LOOP  / Loop back
+          HLT       / Done
+
+Assembled code:
+    20: 7200  (counter - set as needed)
+    21: 0077  (mask value)
+    30: 7200  CLA
+    31: 6021  PSF
+    32: 5031  JMP 31
+    33: 1020  TAD 20
+    34: 0021  AND 21
+    35: 6026  PPC
+    36: 2020  ISZ 20
+    37: 5030  JMP 30
+    40: 7402  HLT
+
+RESULTS
+-------
+With counter = 7200 (for 384 bytes):
+- Output: Perfect counting pattern 000-077 repeating
+- Pattern cycles 6 times (384 ÷ 64 = 6)
+- File size: Exactly 384 bytes
+- Verification: od -b shows clean sequence
+
+Sample output (octal bytes):
+    000 001 002 003 004 005 006 007 ... 075 076 077
+    000 001 002 003 004 005 006 007 ... 075 076 077
+    (repeating pattern)
+
+SIMH COMMANDS USED
+------------------
+Setup:
+    sim> d 20 7200          # Set counter
+    sim> d 21 77            # Set mask
+    sim> attach ptp file.bin # Attach output file
+    sim> d pc 30            # Set program counter
+
+Debugging:
+    sim> e 30-40            # Examine memory range
+    sim> s                  # Single step
+    sim> show ptp           # Show punch status
+    
+Run:
+    sim> run 30             # Run from address 30
+    sim> c                  # Continue after stepping
+    
+Cleanup:
+    sim> detach ptp         # Close output file
+
+File verification:
+    !ls -l *.bin            # List output files
+    !od -b file.bin         # View in octal bytes
+    !wc -c file.bin         # Count bytes
+
+KEY LESSONS LEARNED
+-------------------
+1. Always check device ready flags (PSF) before I/O operations
+2. IOT instruction format: 6DDD where D = device code in bits 3-8
+3. ISZ increments then tests - affects loop iteration counts
+4. Counter math: Starting at N gives (7777 - N + 1) iterations
+5. PAL8 binary format uses specific loader sequences
+6. SIMH's disassembler can show wrong mnemonics for some IOTs
+7. Single-stepping is invaluable for debugging timing issues
+
+TOOLS AND ENVIRONMENT
+---------------------
+- SIMH PDP-8 simulator V4.0-0
+- PAL8 assembler
+- TECO editor for source entry
+- ABSLDR for loading binaries
+- TNFS server (dalek3 @ 192.168.0.8) for file storage
+- Unix od/ls/wc commands for verification
+
+FILES CREATED
+-------------
+- punch.bin: Initial PAL8 assembly output
+- zeros.bin: First attempt (9 bytes - failed)
+- zed.bin: With ready check (255 bytes - off by 1)
+- zed2.bin: Counter adjusted (257 bytes - off by 1)
+- zed3.bin: Counting pattern (384 bytes - perfect!)
+
+FURTHER EXPLORATIONS
+--------------------
+Possible enhancements:
+- Try different mask values (0377 for 8-bit, 7777 for 12-bit)
+- Implement binary loader format output
+- Add checksum generation
+- Create block write routines for larger data transfers
+- Explore paper tape reader (PTR) for input operations
+
+ACKNOWLEDGMENTS
+---------------
+This adventure demonstrated the elegance of PDP-8 architecture:
+- Simple, orthogonal instruction set
+- Microcoded operate instructions
+- Memory-mapped I/O through IOT instructions
+- Clean loop structures with ISZ
+
+The PDP-8: small, but mighty! 
+
+--- End of Document ---

@@ -9,9 +9,12 @@
 unit
 .project
 __pycache__
+basic_*/*
 bin/*
 checkpoint/*
-magtape/*
 disk/*
+extracted_*/*
+magtape/*
+media/*
 tests/pdp8_tests
 trace-args

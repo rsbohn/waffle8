@@ -219,6 +219,18 @@ static int monitor_config_load_file(const char *path, struct monitor_config *con
                     return -1;
                 }
             }
+        } else if (strcmp(current_device, "paper_tape_punch") == 0) {
+            if (strcmp(key, "output") == 0) {
+                if (monitor_config_set_string(&config->paper_tape_punch_output, value) != 0) {
+                    fclose(fp);
+                    return -1;
+                }
+            } else if (strcmp(key, "enabled") == 0) {
+                bool flag = false;
+                if (parse_boolean(value, &flag)) {
+                    config->paper_tape_punch_enabled = flag;
+                }
+            }
         } else if (strncmp(current_device, "magtape", 7) == 0) {
             struct monitor_magtape_unit_config *slot = current_magtape;
             if (!slot) {
