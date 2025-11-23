@@ -1,0 +1,107 @@
+/ a simple thing
+/ PAL8 source file
+        * 00020
+TOS,    0
+SP,     0
+W,      0
+MASK,   0007
+STBASE, 0100            / base of stack in core
+LINE,   0020            / memory line to print
+
+        * 00200
+START,  CLL CLA
+        TAD I RTC
+        JMS PUSH
+        JMS MSHOW
+        HLT
+        JMP START
+
+RTC,    07760
+PUSH,   0
+        DCA W
+        TAD TOS
+        DCA I SP
+        TAD SP
+        IAC
+        AND MASK
+        TAD STBASE
+        DCA SP
+        TAD W
+        DCA TOS
+        JMP I PUSH
+
+        * 00260
+MSHOW,  0
+        CLA CLL         / Print the address of the memory line
+        TAD LINE
+        DCA W2
+        JMS NPRINT
+        CLA CLL
+        TAD COLON
+        JMS PUTCH
+        CLA CLL
+        TAD MSLSZ       / print contents of memory line
+        DCA MSN
+        CMA             / AC = -1
+        TAD LINE        / start address - 1 (because of pre-increment in 0010)
+        DCA 0010
+MSLOOP, CLL CLA
+        TAD SPACE
+        JMS PUTCH
+        CLA CLL
+        TAD I 0010
+        DCA W2
+        JMS NPRINT
+        CLL CLA
+        ISZ MSN
+        JMP MSLOOP
+
+MSDONE, CLA CLL
+        TAD CR
+        JMS PUTCH
+        JMP I MSHOW
+
+W2,     0
+MSLSZ,  07770
+MSN,    00000
+CR,     00015
+SPACE,  00040
+ZERO,   "0"
+COLON,  00072
+
+NPRINT, 0               / print W2 in octal 0wxyz
+        CLA CLL
+        TAD ZERO        / leading zero
+        JMS PUTCH
+        CLA CLL
+        TAD W2
+        BSW
+        RAR;RAR;RAR
+        AND MASK
+        TAD ZERO
+        JMS PUTCH       / digit w
+        CLA CLL
+        TAD W2
+        BSW
+        AND MASK
+        TAD ZERO
+        JMS PUTCH       / digit x
+        CLA CLL
+        TAD W2
+        RAR;RAR;RAR
+        AND MASK
+        TAD ZERO
+        JMS PUTCH       / digit y
+        CLA CLL
+        TAD W2
+        AND MASK
+        TAD ZERO
+        JMS PUTCH       / digit z
+        JMP I NPRINT
+
+PUTCH,  0
+SPIN,   IOT 6041
+        JMP SPIN
+        IOT 6046
+        JMP I PUTCH
+
