@@ -1,0 +1,169 @@
+/ a simple program, really
+*00200
+
+CLA
+CLL
+TAD .+2
+JMP .+2
+01000
+JMS PUSH
+CLA
+CLL
+TAD .+2
+JMP .+2
+02000
+JMS PUSH
+CLA
+CLL
+TAD .+2
+JMP .+2
+03000
+JMS PUSH
+CLA
+CLL
+TAD .+2
+JMP .+2
+00030
+JMS DOTLIN
+HLT
+/ core.ft -- a forth-like language
+/ really just assembler macros and subroutines
+/ T0 is the first local value (';' + 1)
+/ Each 'word' will have temp variables after ';'
+/ !T0 stores AC in the first temp variable
+/ @T0 is [ CLL CLA; TAD [T0] ]
+// utilities
+AZERO, "0"
+M07, 00007
+
+/ PUSH trampoline
+PUSH, 0
+JMS I THERE
+JMP I PUSH
+THERE, 00400
+
+PUTC, 0
+    6041
+    JMP .-1
+    6046
+    JMP I PUTC
+PUTCH, 0
+    6041
+    JMP .-1
+    6046
+    JMP I PUTCH
+/ Can't use DUP as POCT is used to print the stack
+POCT, 0
+    DCA POCT_T0
+    CLA CLL
+    TAD POCT_T0
+    BSW CLL
+    RAR
+    RAR
+    RAR
+    AND M07
+    TAD AZERO
+    PUTC
+    CLA CLL
+    TAD POCT_T0
+    BSW
+    AND M07
+    TAD AZERO
+    PUTC
+    CLA CLL
+    TAD POCT_T0
+    CLL
+    RAR
+    RAR
+    RAR
+    AND M07
+    TAD AZERO
+    PUTC
+    CLA CLL
+    TAD POCT_T0
+    TAD AZERO
+    PUTC
+    JMP I POCT
+POCT_T0, 00000
+DOTLIN, 0
+    CLA CLL
+    TAD W
+    POCT
+    CLA CLL
+    TAD W
+    DCA P010
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTSPAC
+    CLA CLL
+    TAD P010
+    POCT
+    DOTCRLF
+    JMP I DOTLIN
+DOTSPAC, 0
+    CLL CLA CLA CLL
+    TAD DOTSPAC_T0
+    PUTCH
+    JMP I DOTSPAC
+DOTSPAC_T0, 00040
+DOTCRLF, 0
+    CLL CLA CLA CLL
+    TAD DOTCRLF_T0
+    PUTCH
+    CLA CLL
+    TAD DOTCRLF_T1
+    PUTCH
+    JMP I DOTCRLF
+DOTCRLF_T0, 00012 00015
+DOTCRLF_T1, 0
+
+*00400
+/ --- PUSH ---
+IPSH, 0
+DCA W
+TAD SP
+IAC
+AND PMSK
+TAD DSBA
+DCA SP
+TAD TOS
+DCA I SP
+TAD W
+DCA TOS
+JMP I IPSH
+
+PMSK, 00007
+
+*00010
+P010, 0
+*00020
+TOS, 0
+*00021
+SP, 0
+*00022
+W, 0
+*00023
+DSBA, 00030
+*00400

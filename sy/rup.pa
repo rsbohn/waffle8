@@ -1,0 +1,33 @@
+/ syr/up .pa
+/ sort of a nucleus
+		* 00017
+SP,		00000
+TOS,	00000	/ value
+STOFF,	00000
+STBASE,	03777
+MASK,	00007
+RTC,	07600
+
+		* 00030
+START,	CLL CLA
+		TAD I RTC
+		JMS PUSH
+		TAD I RTC
+		IAC
+		JMS PUSH
+		HLT
+		
+PUSH, 0
+		DCA W
+		TAD STOFF
+		AND MASK
+		TAD STBASE
+		DCA SP
+		TAD TOS
+		DCA I SP
+		TAD SP
+		DCA STOFF
+		TAD W
+		DCA TOS
+		JMP I PUSH
+W,		0

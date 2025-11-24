@@ -1,0 +1,89 @@
+/ core.ft -- a forth-like language
+/ really just assembler macros and subroutines
+/ T0 is the first local value (';' + 1)
+/ Each 'word' will have temp variables after ';'
+/ !T0 stores AC in the first temp variable
+/ @T0 is [ CLL CLA; TAD [T0] ]
+// utilities
+:RR3 [ CLL;RAR;RAR;RAR ] 
+:MSK7 [ AND M07 ]
+:ASDG [ TAD AZERO ]	/ ASCII for 0..7.
+:BSW [ BSW ] 		/ byte-swap-word aabb >> bbaa (in AC)
+:SPIN [ JMP .-1 ] 	/ calculated at compile time
+AZERO, "0"
+M07,	00007
+
+/ PUSH trampoline
+PUSH,	0
+	JMS I THERE
+	JMP I PUSH
+THERE, 00400
+
+:PUTC 6041 SPIN 6046 ;
+:PUTCH 6041 SPIN 6046 ;
+/ Can't use DUP as POCT is used to print the stack
+:POCT !T0			/ print AC as octal
+    @T0 BSW RR3 MSK7 ASDG PUTC
+    @T0 BSW MSK7 ASDG PUTC
+    @T0 RR3 MSK7 ASDG PUTC
+    @T0 ASDG PUTC ;	/ consume TOS
+    00000
+:.LIN 			/ print memory line as 8 octal words
+    @W POCT
+    @W !P010		/ put line in piptr 00010
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .SPAC
+    @P010 POCT
+    .CRLF
+;
+:.SPAC
+	CLL CLA
+	@T0
+	PUTCH
+;
+00040
+:.CRLF
+	CLL CLA
+	@T0
+	PUTCH
+	@T1
+	PUTCH
+;
+00012
+00015
+
+BASE 00400
+/ --- PUSH ---
+IPSH,	0			/ put AC on the stack
+    DCA W
+    TAD SP
+    IAC
+    AND PMSK
+    TAD DSBA
+    DCA SP
+    TAD TOS
+    DCA I SP
+    TAD W
+    DCA TOS
+    JMP I IPSH
+
+PMSK, 00007
+
+PAGE0[
+00010 P010
+00020 TOS
+00021 SP
+00022 W
+00023 DSBA 00030	/ datastack base
+]

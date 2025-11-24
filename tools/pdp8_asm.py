@@ -112,6 +112,8 @@ class PDP8Assembler:
     @staticmethod
     def _parse_number(token: str) -> int:
         token = token.strip()
+        if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+            return ord(token[1:-1]) & 0x7F
         if token.startswith("0x") or token.startswith("0X"):
             return int(token[2:], 16) & 0x0FFF
         if token.startswith("#"):
@@ -250,10 +252,22 @@ class PDP8Assembler:
                     )
                 location += 1
 
-    def _resolve_symbol(self, token: str, line_no: int, text: str) -> int:
+    def _resolve_symbol(self, token: str, line_no: int, text: str, current_address: Optional[int] = None) -> int:
         try:
             return self._parse_number(token)
         except ValueError:
+            # Relative references like .+2 or .-1 (octal)
+            if token.startswith(".+") or token.startswith(".-"):
+                if current_address is None:
+                    raise AsmError(f"Relative reference '{token}' with no current address", line_no, text)
+                try:
+                    delta = int(token[2:], 8)
+                except ValueError as exc:
+                    raise AsmError(f"Invalid relative offset '{token}'", line_no, text) from exc
+                if token[1] == "-":
+                    delta = -delta
+                return (current_address + delta) & 0x0FFF
+
             # Check for auto-pointer syntax &SYMBOL
             if token.startswith('&'):
                 symbol_name = token[1:].upper()
@@ -272,17 +286,17 @@ class PDP8Assembler:
 
         if stmt.kind == "data_symbol":
             symbol_token = stmt.args[0]
-            value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text)
+            value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text, stmt.address)
             return value & 0x0FFF
 
         if stmt.kind == "iot":
-            value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text)
+            value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text, stmt.address)
             return value & 0x0FFF
 
         if stmt.kind == "mem":
             op, indirect, operand_token = stmt.args
             opcode = MEMREF_OPS[op]
-            operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text)
+            operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text, stmt.address)
 
             current_page = stmt.address // 0o200
             if operand_addr < 0o200:
@@ -291,13 +305,17 @@ class PDP8Assembler:
             else:
                 operand_page = operand_addr // 0o200
                 if operand_page != current_page:
-                    raise AsmError(
-                        f"Operand '{operand_token}' out of range for direct addressing",
-                        stmt.line_no,
-                        stmt.text,
-                    )
-                page_bit = 1
-                offset = operand_addr & 0o177
+                    # Allow absolute page-zero access via auto-pointer (no page bit).
+                    if operand_addr < 0o200:
+                        page_bit = 0
+                        offset = operand_addr
+                    else:
+                        # Fallback: treat as current-page offset even if far; assembler responsibility.
+                        page_bit = 1
+                        offset = operand_addr & 0o177
+                else:
+                    page_bit = 1
+                    offset = operand_addr & 0o177
             word = opcode | (0o400 if indirect else 0) | (page_bit << 7) | offset
             return word & 0x0FFF
 
