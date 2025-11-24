@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""
+Expand .ft sources into plain PAL-style assembly (.pa).
+Rules implemented:
+- Macro definitions use `:NAME [ ... ]` and expand inline wherever NAME appears.
+- Colon definitions `:NAME ... ;` become callable subroutines:
+    NAME, 0
+        <expanded body>
+        JMP I NAME
+    NAME_T0, 0    (locals as needed)
+- `BASE <addr>` writes an origin directive `*<addr>`).
+- `USE <file>` pulls in another .ft from the same directory (case-insensitive).
+- `PAGE0[ ... ]` reserves absolute page-0 symbols; lines inside are `addr LABEL [value]`.
+- `@SYM` expands to `CLL; CLA; TAD SYM`, `!SYM` expands to `DCA SYM`.
+- Everything else passes through to the output assembler.
+"""
+from __future__ import annotations
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Optional
+
+
+class FtError(Exception):
+    """Raised for .ft expansion issues."""
+    def __init__(self, message: str, file: Optional[Path] = None, line: Optional[int] = None):
+        self.file = file
+        self.line = line
+        if file and line:
+            super().__init__(f"{file}:{line}: {message}")
+        elif file:
+            super().__init__(f"{file}: {message}")
+        else:
+            super().__init__(message)
+
+
+def tokenize(line: str) -> List[str]:
+    """Split a source line into tokens, stripping comments and keeping ; [ ]."""
+    if "/" in line:
+        line = line.split("/", 1)[0]
+    spaced = (
+        line.replace("[", " [ ")
+        .replace("]", " ] ")
+        .replace(";", " ; ")
+    )
+    return spaced.split()
+
+
+def normalize_tokens(tokens: Iterable[str]) -> List[str]:
+    """Uppercase tokens and normalize char literals, preserving control markers."""
+    out: List[str] = []
+    for tok in tokens:
+        if tok in {"[", "]", ";"}:
+            out.append(tok)
+            continue
+        if tok.startswith("'") and len(tok) >= 2:
+            out.append(f'"{tok[1:]}"')
+            continue
+        out.append(tok.upper())
+    return out
+
+
+def map_dot_symbol(tok: str) -> str:
+    """Convert .NAME tokens to DOTNAME, leaving .+n/.-n/. alone."""
+    if tok.startswith(":.") and len(tok) > 2 and tok[2] not in {"+", "-"}:
+        return f":DOT{tok[2:]}"
+    if tok.startswith(".") and len(tok) > 1 and tok[1] not in {"+", "-"}:
+        return f"DOT{tok[1:]}"
+    return tok
+
+
+def resolve_use_path(current: Path, target: str) -> Path:
+    """Locate a USE target in the current file's directory (case-insensitive)."""
+    direct = current.parent / target
+    if direct.exists():
+        return direct
+    lower = target.lower()
+    matches = [child for child in current.parent.iterdir() if child.name.lower() == lower]
+    if len(matches) == 1:
+        return matches[0]
+    raise FtError(f"Unable to resolve USE target '{target}'", current)
+
+
+def expand_macros(
+    tokens: List[str], 
+    macros: Dict[str, List[str]], 
+    depth: int = 0, 
+    stack: List[str] | None = None,
+    context_file: Optional[Path] = None,
+    context_line: Optional[int] = None
+) -> List[str]:
+    """Recursively expand macro tokens, stopping on cycles."""
+    if stack is None:
+        stack = []
+    if depth > 50:
+        raise FtError("Macro expansion exceeded recursion depth", context_file, context_line)
+    out: List[str] = []
+    for tok in tokens:
+        if tok in macros:
+            if tok in stack:
+                # Treat recursive/self-referential macros as literals.
+                out.append(tok)
+                continue
+            out.extend(expand_macros(macros[tok], macros, depth + 1, stack + [tok], context_file, context_line))
+        else:
+            out.append(tok)
+    return out
+
+
+def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, context_line: Optional[int] = None) -> List[str]:
+    """Convert a flat token stream (with ;) into PAL source lines."""
+    lines: List[str] = []
+    
+    # PDP-8 instruction sets
+    operate_tokens = {
+        "CLA", "CLL", "CMA", "CML", "RAR", "RAL", "RTR", "RTL", "BSW", "IAC",
+        "SMA", "SZA", "SNL", "SPA", "SNA", "SZL", "OSR", "HLT", "ION", "IOFF", "SNS",
+        "SKP", "CLA2", "SMA2", "SZA2", "SNL2"  # Group 2 operates
+    }
+    memref_ops = {"AND", "TAD", "ISZ", "DCA", "JMS", "JMP"}
+    
+    idx = 0
+    pending_operate: List[str] = []
+    
+    def flush_operate():
+        nonlocal pending_operate
+        if pending_operate:
+            lines.append(" ".join(pending_operate))
+            pending_operate = []
+    
+    while idx < len(tokens):
+        tok = tokens[idx]
+        
+        # Statement separator
+        if tok == ";":
+            flush_operate()
+            idx += 1
+            continue
+        
+        # Label definition (ends with comma)
+        if tok.endswith(","):
+            flush_operate()
+            stmt = [tok]
+            if idx + 1 < len(tokens) and tokens[idx + 1] != ";":
+                stmt.append(tokens[idx + 1])
+                idx += 1
+            lines.append(" ".join(stmt))
+            idx += 1
+            continue
+        
+        # Memory reference instruction
+        if tok in memref_ops:
+            flush_operate()
+            stmt = [tok]
+            
+            # Handle indirect and/or zero-page addressing
+            next_idx = idx + 1
+            if next_idx < len(tokens):
+                next_tok = tokens[next_idx]
+                
+                # Check for "I" (indirect)
+                if next_tok == "I":
+                    if next_idx + 1 >= len(tokens):
+                        raise FtError(f"Missing operand for {tok} I", context_file, context_line)
+                    stmt.extend(["I", tokens[next_idx + 1]])
+                    idx = next_idx + 1
+                # Check for "Z" (zero-page)
+                elif next_tok == "Z":
+                    if next_idx + 1 >= len(tokens):
+                        raise FtError(f"Missing operand for {tok} Z", context_file, context_line)
+                    stmt.extend(["Z", tokens[next_idx + 1]])
+                    idx = next_idx + 1
+                # Just operand
+                elif next_tok != ";":
+                    stmt.append(next_tok)
+                    idx = next_idx
+                else:
+                    raise FtError(f"Missing operand for {tok}", context_file, context_line)
+            else:
+                raise FtError(f"Missing operand for {tok}", context_file, context_line)
+            
+            lines.append(" ".join(stmt))
+            idx += 1
+            continue
+        
+        # IOT instruction
+        if tok == "IOT":
+            flush_operate()
+            stmt = [tok]
+            if idx + 1 < len(tokens) and tokens[idx + 1] != ";":
+                stmt.append(tokens[idx + 1])
+                idx += 1
+            lines.append(" ".join(stmt))
+            idx += 1
+            continue
+        
+        # Operate microinstruction
+        if tok in operate_tokens:
+            pending_operate.append(tok)
+            idx += 1
+            # Flush if next token is not an operate or we're at statement end
+            if idx >= len(tokens) or tokens[idx] in {";"} or tokens[idx] not in operate_tokens:
+                flush_operate()
+            continue
+        
+        # Numeric literal, quoted char, or other token stays as single line
+        flush_operate()
+        lines.append(tok)
+        idx += 1
+    
+    flush_operate()
+    return lines
+
+
+def collect_values(tokens: Iterable[str]) -> List[str]:
+    """Collect literal/value fields, splitting on ; tokens."""
+    values: List[str] = []
+    current: List[str] = []
+    for tok in tokens:
+        if tok in {"[", "]"}:
+            continue
+        if tok == ";":
+            if current:
+                values.append(" ".join(current))
+                current = []
+            continue
+        current.append(tok)
+    if current:
+        values.append(" ".join(current))
+    return values
+
+
+@dataclass
+class LocalState:
+    prefix: str
+    max_index: int = -1
+
+
+def resolve_target(name: str, locals_state: LocalState | None) -> str:
+    """Resolve @/! targets, mapping Tn to local labels when possible."""
+    upper = name.upper()
+    if upper.startswith("T") and len(upper) > 1 and upper[1:].isdigit():
+        idx = int(upper[1:])
+        if locals_state is not None:
+            locals_state.max_index = max(locals_state.max_index, idx)
+            return f"{locals_state.prefix}_T{idx}"
+    return upper
+
+
+def translate_tokens(tokens: List[str], locals_state: LocalState | None) -> List[str]:
+    """Apply @/! expansions and drop bracket tokens."""
+    out: List[str] = []
+    for tok in tokens:
+        if tok in {"[", "]"}:
+            continue
+        if tok.startswith("!"):
+            out.extend(["DCA", resolve_target(tok[1:], locals_state)])
+            continue
+        if tok.startswith("@"):
+            target = resolve_target(tok[1:], locals_state)
+            out.extend(["CLA", "CLL", "TAD", target])
+            continue
+        out.append(tok)
+    return out
+
+
+def handle_page0(lines: List[str], start_idx: int, output: List[str], file_path: Path) -> int:
+    """Process a PAGE0[...] block; returns the index of the line after the block."""
+    idx = start_idx + 1
+    while idx < len(lines):
+        raw = lines[idx]
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("/"):
+            idx += 1
+            continue
+        if stripped.startswith("]"):
+            return idx + 1
+        tokens = [map_dot_symbol(tok) for tok in normalize_tokens(tokenize(raw))]
+        if not tokens:
+            idx += 1
+            continue
+        
+        if len(tokens) < 2:
+            raise FtError("PAGE0 entry must have at least address and label", file_path, idx + 1)
+        
+        addr = tokens[0]
+        label = tokens[1]
+        value = tokens[2] if len(tokens) >= 3 else "0"
+        
+        output.append(f"*{addr}")
+        output.append(f"{label}, {value}")
+        idx += 1
+    
+    raise FtError("Unterminated PAGE0[ block", file_path, start_idx + 1)
+
+
+def process_file(
+    path: Path,
+    macros: Dict[str, List[str]],
+    origin_ref: List[str | None] | None = None,
+    pending: List[Path] | None = None,
+) -> List[str]:
+    lines = path.read_text().splitlines()
+    output: List[str] = []
+    idx = 0
+    
+    if origin_ref is None:
+        origin_ref = [None]
+    if pending is None:
+        pending = []
+    
+    while idx < len(lines):
+        raw = lines[idx]
+        stripped = raw.strip()
+        
+        # Blank line
+        if not stripped:
+            output.append("")
+            idx += 1
+            continue
+        
+        # Comment line
+        if stripped.startswith("/"):
+            output.append(stripped)
+            idx += 1
+            continue
+        
+        tokens = [map_dot_symbol(tok) for tok in normalize_tokens(tokenize(raw))]
+        if not tokens:
+            idx += 1
+            continue
+        
+        first = tokens[0]
+        
+        # USE directive
+        if first == "USE":
+            if len(tokens) < 2:
+                raise FtError("USE directive missing target", path, idx + 1)
+            include_path = resolve_use_path(path, tokens[1])
+            pending.append(include_path)
+            idx += 1
+            continue
+        
+        # BASE directive
+        if first == "BASE":
+            if len(tokens) < 2:
+                raise FtError("BASE directive missing address", path, idx + 1)
+            origin_ref[0] = tokens[1]
+            output.append(f"*{origin_ref[0]}")
+            idx += 1
+            continue
+        
+        # Built-in LIT expansion
+        if first == "LIT":
+            if len(tokens) < 2:
+                raise FtError("LIT directive missing literal", path, idx + 1)
+            literal = tokens[1]
+            rest = tokens[2:]
+            lit_tokens: List[str] = ["CLA", ";", "CLL", ";", "TAD", ".+2", ";", "JMP", ".+2", ";", literal]
+            if rest:
+                lit_tokens.append(";")
+                lit_tokens.extend(rest)
+            for line in tokens_to_lines(lit_tokens, path, idx + 1):
+                output.append(line)
+            idx += 1
+            continue
+        
+        # PAGE0 block
+        if first.startswith("PAGE0[") or (first == "PAGE0" and len(tokens) > 1 and tokens[1] == "["):
+            restore_origin = origin_ref[0]
+            idx = handle_page0(lines, idx, output, path)
+            if restore_origin is not None:
+                output.append(f"*{restore_origin}")
+            continue
+        
+        # Macro definition :NAME [ ... ]
+        if first.startswith(":") and "[" in tokens:
+            name = map_dot_symbol(first[1:])
+            body_tokens = tokens[tokens.index("[") + 1 :]
+            idx += 1
+            while "]" not in body_tokens and idx < len(lines):
+                if body_tokens and body_tokens[-1] != ";":
+                    body_tokens.append(";")
+                body_tokens.extend(map(map_dot_symbol, normalize_tokens(tokenize(lines[idx]))))
+                idx += 1
+            if "]" not in body_tokens:
+                raise FtError(f"Unterminated macro definition for {name}", path, idx)
+            body_tokens = body_tokens[: body_tokens.index("]")]
+            macros[name] = body_tokens
+            continue
+        
+        # Colon definition :NAME ... ;
+        if first.startswith(":"):
+            name = map_dot_symbol(first[1:])
+            body_tokens = tokens[1:]
+            start_line = idx + 1
+            idx += 1
+            while ";" not in body_tokens and idx < len(lines):
+                body_tokens.extend(map(map_dot_symbol, normalize_tokens(tokenize(lines[idx]))))
+                idx += 1
+            if ";" not in body_tokens:
+                raise FtError(f"Missing ';' terminator for {name}", path, start_line)
+            
+            semi = body_tokens.index(";")
+            locals_tokens = body_tokens[semi + 1 :]
+            body_tokens = body_tokens[:semi]
+            
+            # Collect additional locals lines
+            while idx < len(lines):
+                peek_raw = lines[idx]
+                peek_stripped = peek_raw.strip()
+                if not peek_stripped or peek_stripped.startswith("/"):
+                    break
+                peek_tokens = [map_dot_symbol(tok) for tok in normalize_tokens(tokenize(peek_raw))]
+                if not peek_tokens:
+                    break
+                head = peek_tokens[0]
+                if head.startswith(":") or head in {"BASE", "USE"} or head.startswith("PAGE0[") or head.endswith(","):
+                    break
+                locals_tokens.extend(peek_tokens)
+                idx += 1
+            
+            expanded_body = expand_macros(body_tokens, macros, context_file=path, context_line=start_line)
+            locals_state = LocalState(prefix=name)
+            translated_body = translate_tokens(expanded_body, locals_state)
+            body_lines = tokens_to_lines(translated_body, path, start_line)
+            
+            output.append(f"{name}, 0")
+            for line in body_lines:
+                output.append(f"    {line}")
+            output.append(f"    JMP I {name}")
+            
+            expanded_locals = expand_macros(locals_tokens, macros, context_file=path, context_line=start_line) if locals_tokens else []
+            local_values = collect_values(expanded_locals)
+            needed = max(locals_state.max_index + 1 if locals_state.max_index >= 0 else 0, len(local_values))
+            
+            # Pad with zeros if needed
+            if len(local_values) < needed:
+                local_values.extend(["0"] * (needed - len(local_values)))
+            
+            for i, value in enumerate(local_values[:needed]):
+                output.append(f"{name}_T{i}, {value}")
+            
+            continue
+        
+        # Plain line: expand macros, @/! etc., pass through
+        expanded = expand_macros(tokens, macros, context_file=path, context_line=idx + 1)
+        translated = translate_tokens(expanded, locals_state=None)
+        for line in tokens_to_lines(translated, path, idx + 1):
+            output.append(line)
+        idx += 1
+    
+    # Process pending USE targets (LIFO)
+    while pending:
+        include_path = pending.pop()
+        output.extend(process_file(include_path, macros, origin_ref, pending))
+    
+    return output
+
+
+def main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(description="Expand .ft sources into PAL-style .pa output.")
+    parser.add_argument("source", type=Path, help="Input .ft file")
+    parser.add_argument("output", type=Path, nargs="?", help="Output .pa file (default: change suffix to .pa)")
+    parser.add_argument("--stdout", action="store_true", help="Write expanded output to stdout instead of a file")
+    args = parser.parse_args(argv)
+    
+    if not args.source.exists():
+        print(f"Error: Source file '{args.source}' not found")
+        return 1
+    
+    macros: Dict[str, List[str]] = {}
+    try:
+        expanded_lines = process_file(args.source, macros)
+    except FtError as exc:
+        print(f"Error: {exc}")
+        return 1
+    
+    text = "\n".join(expanded_lines) + "\n"
+    
+    if args.stdout:
+        print(text, end="")
+        return 0
+    
+    out_path = args.output or args.source.with_suffix(".pa")
+    try:
+        out_path.write_text(text)
+        print(f"Successfully expanded {args.source} -> {out_path}")
+    except OSError as exc:
+        print(f"Unable to write {out_path}: {exc}")
+        return 1
+    
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))

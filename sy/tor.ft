@@ -1,6 +1,6 @@
 / a simple thing
 / PAL8 source file
-        * 00020
+BASE 00020
 TOS,    0
 SP,     0
 W,      0
@@ -9,7 +9,7 @@ STBASE, 0100            / base of stack in core
 SCORE,  0020            / TOS SP W ...
 LINE,   0020            / memory line to print
 
-        * 00200
+BASE 00200
 START,  CLL CLA
         TAD I RTC
         JMS PUSH
@@ -38,7 +38,7 @@ PUSH,   0
         DCA TOS
         JMP I PUSH
 
-        * 00260
+BASE 00260
 MSHOW,  0
         CLA CLL         / Print the address of the memory line
         TAD LINE
@@ -112,8 +112,8 @@ NPRINT, 0               / print W2 in octal 0wxyz
         JMP I NPRINT
 
 PUTCH,  0
-SPIN,   IOT 6041
-        JMP SPIN
+        IOT 6041
+        JMP .-1
         IOT 6046
         JMP I PUTCH
 
