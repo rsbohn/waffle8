@@ -1,0 +1,51 @@
+/ bootstrap rom for TC08 DT0
+/ from TC08SY.PA
+/ Dexter S. 2025-11-25
+
+/ IOT Pseudo-ops
+DTCA= 6741
+DTXA= 6742
+DTSF= 6744
+DTLB= 6746
+NOP = 7000
+/#show-table
+
+        *07600
+STARTB, TAD B600
+        DTCA DTXA
+        DTSF
+        JMP .-1
+        DCA BOOTX
+        DCA BOOTY
+        TAD B620
+        JMP BOOT3
+        * 7611
+BM7642, 00137           /-7641
+BOOT1,  TAD 7755
+        TAD BM7642
+        SNA CLA
+        JMP BOOT2
+        NOP
+        JMP BOOT1
+BOOT2,  TAD B10
+        DTLB
+        DTSF
+        JMP .-1
+BOOT3,  DTXA
+        DTLB
+        TAD B7577
+        DCA 7755
+        DCA 7754
+BOOTX,  NOP
+BOOTY,  JMP 7642
+        JMP BOOT1
+B7577,  7577
+B10,    10
+B600,   600
+B620,   620
+        * 07642
+        DCA 7744
+        DTSF
+        JMP .-1
+        NOP
+ENDB,   JMP 7605

@@ -28,6 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+# --- Temporary pseudo-opcode table for session use ---
+# This table is intended for temporary pseudo-ops, e.g. for assembling tc08.pa.
+# It is kept separate from the main opcode tables and can be extended or cleared as needed.
+PSEUDO_OPS: Dict[str, int] = {}
+
 
 class AsmError(Exception):
     """Assembly error with optional line context."""
@@ -122,12 +127,27 @@ class PDP8Assembler:
         return int(token, 8) & 0x0FFF
 
     def first_pass(self) -> None:
+        pseudo_op_pattern = re.compile(r"^([A-Za-z0-9_]+)\s*=\s*([0-7]+)")
         location = 0
         label_pattern = re.compile(r"\s*([A-Za-z0-9_]+),\s*(.*)")
 
         for line_no, raw in enumerate(self.lines, start=1):
+            if '/#show-table' in raw:
+                print("Pseudo-opcode table:")
+                if not PSEUDO_OPS:
+                    print("  (empty)")
+                else:
+                    for k, v in PSEUDO_OPS.items():
+                        print(f"  {k} = {v:04o}")
             stripped = self._strip_comment(raw).strip()
             if not stripped:
+                continue
+
+            # Pseudo-op directive: NAME = VALUE (octal)
+            pseudo_match = pseudo_op_pattern.match(stripped)
+            if pseudo_match:
+                name, value = pseudo_match.group(1).upper(), int(pseudo_match.group(2), 8)
+                PSEUDO_OPS[name] = value
                 continue
 
             if stripped.startswith("*"):
@@ -179,6 +199,15 @@ class PDP8Assembler:
                     continue
                 upper_tokens = [tok.upper() for tok in tokens]
                 op = upper_tokens[0]
+
+                # Check pseudo-opcode table first (temporary session ops)
+                if op in PSEUDO_OPS:
+                    value = PSEUDO_OPS[op]
+                    self.statements.append(
+                        Statement("data", location, (value,), line_no, part, raw.rstrip("\n"))
+                    )
+                    location += 1
+                    continue
 
                 if op in MEMREF_OPS:
                     indirect = False
@@ -508,13 +537,22 @@ def assemble(path: Path, output: Path) -> None:
 
 
 def main(argv: Sequence[str]) -> int:
+
     parser = argparse.ArgumentParser(description="Assemble PDP-8 PAL-style source to S-records.")
     parser.add_argument("source", type=Path, help="Input assembly file")
     parser.add_argument("output", type=Path, nargs="?", help="Output S-record file")
     parser.add_argument("-o", "--output", dest="output_path", type=Path, help="Explicit S-record output path")
     parser.add_argument("--list", action="store_true", help="Emit a human-readable listing to STDOUT")
     parser.add_argument("--list-only", action="store_true", help="Generate listing without writing S-records")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print pseudo-opcode table and extra info")
     args = parser.parse_args(argv)
+    if args.verbose:
+        print("Pseudo-opcode table:")
+        if not PSEUDO_OPS:
+            print("  (empty)")
+        else:
+            for k, v in PSEUDO_OPS.items():
+                print(f"  {k} = {v:04o}")
 
     if args.list_only and not args.list:
         parser.error("--list-only requires --list")
