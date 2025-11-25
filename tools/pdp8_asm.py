@@ -250,7 +250,16 @@ class PDP8Assembler:
                     )
                 location += 1
 
-    def _resolve_symbol(self, token: str, line_no: int, text: str) -> int:
+    def _resolve_symbol(self, token: str, line_no: int, text: str, current_address: Optional[int] = None) -> int:
+        if token.startswith(".") and current_address is not None:
+            relative_match = re.fullmatch(r"\.(?:([+-])([0-7]+))?", token.strip())
+            if relative_match:
+                sign, digits = relative_match.groups()
+                offset = int(digits, 8) if digits is not None else 0
+                if sign == "-":
+                    offset = -offset
+                return (current_address + offset) & 0x0FFF
+
         try:
             return self._parse_number(token)
         except ValueError:
@@ -260,7 +269,7 @@ class PDP8Assembler:
                 if symbol_name not in self.symbols:
                     raise AsmError(f"Unknown symbol '{token[1:]}'", line_no, text)
                 return self.symbols[symbol_name]  # Return the address of the symbol
-            
+
             name = token.upper()
             if name not in self.symbols:
                 raise AsmError(f"Unknown symbol '{token}'", line_no, text)
@@ -272,17 +281,17 @@ class PDP8Assembler:
 
         if stmt.kind == "data_symbol":
             symbol_token = stmt.args[0]
-            value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text)
+            value = self._resolve_symbol(symbol_token, stmt.line_no, stmt.text, stmt.address)
             return value & 0x0FFF
 
         if stmt.kind == "iot":
-            value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text)
+            value = self._resolve_symbol(stmt.args[0], stmt.line_no, stmt.text, stmt.address)
             return value & 0x0FFF
 
         if stmt.kind == "mem":
             op, indirect, operand_token = stmt.args
             opcode = MEMREF_OPS[op]
-            operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text)
+            operand_addr = self._resolve_symbol(operand_token, stmt.line_no, stmt.text, stmt.address)
 
             current_page = stmt.address // 0o200
             if operand_addr < 0o200:

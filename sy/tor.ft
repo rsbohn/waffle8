@@ -5,7 +5,7 @@ TOS,    0
 SP,     0
 W,      0
 MASK,   0007
-STBASE, 0100            / base of stack in core
+STBASE, 0030            / base of stack in core
 SCORE,  0020            / TOS SP W ...
 LINE,   0020            / memory line to print
 
@@ -81,6 +81,7 @@ SPACE,  00040
 ZERO,   "0"
 COLON,  00072
 
+:RR3 [ RAR;RAR;RAR ]
 NPRINT, 0               / print W2 in octal 0wxyz
         CLA CLL
         TAD ZERO        / leading zero
@@ -88,7 +89,7 @@ NPRINT, 0               / print W2 in octal 0wxyz
         CLA CLL
         TAD W2
         BSW
-        RAR;RAR;RAR
+        RR3
         AND MASK
         TAD ZERO
         JMS PUTCH       / digit w
@@ -100,7 +101,7 @@ NPRINT, 0               / print W2 in octal 0wxyz
         JMS PUTCH       / digit x
         CLA CLL
         TAD W2
-        RAR;RAR;RAR
+        RR3
         AND MASK
         TAD ZERO
         JMS PUTCH       / digit y

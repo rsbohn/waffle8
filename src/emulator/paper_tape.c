@@ -435,12 +435,14 @@ int pdp8_paper_tape_load(const char *path, pdp8_paper_tape **out_image) {
             parser_name = "mixed";
         }
     }
-    fprintf(stderr,
-            "paper_tape_load: Loaded %zu blocks from %s parser=%s label=%s\n",
-            image->block_count,
-            path ? path : "(unknown)",
-            parser_name,
-            image->label);
+    if (0) {
+	    fprintf(stderr,
+		    "paper_tape_load: Loaded %zu blocks from %s parser=%s label=%s\n",
+		    image->block_count,
+		    path ? path : "(unknown)",
+		    parser_name,
+		    image->label);
+    }
     free(parser_used);
 
     *out_image = image;

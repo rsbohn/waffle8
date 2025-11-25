@@ -1,0 +1,20 @@
+/ PUTC routine copied from sy/tor.ft
+BASE 00200
+
+LIT 110
+JMS PUTC
+LIT 111
+JMS PUTC
+HLT
+
+:LIT  [
+	CLA CLL
+	TAD .+2
+	JMP .+2
+]
+:SPIN [ JMP .-1 ]
+PUTC,   0
+        IOT 6041
+        SPIN
+        IOT 6046
+        JMP I PUTC

@@ -1,0 +1,22 @@
+/ PUTC routine copied from sy/tor.ft
+*00200
+
+CLA
+CLL
+TAD .+2
+JMP .+2
+110
+JMS PUTC
+CLA
+CLL
+TAD .+2
+JMP .+2
+111
+JMS PUTC
+HLT
+
+PUTC, 0
+IOT 6041
+JMP .-1
+IOT 6046
+JMP I PUTC

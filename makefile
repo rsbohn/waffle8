@@ -67,3 +67,8 @@ tools/pdp8_bench: $(PDP8_BENCH_OBJS)
 clean:
 	-@rm bin/monitor bin/pdp8v $(FACTORY_LIB) tests/pdp8_tests tools/pdp8_bench
 	-@rmdir bin 2>/dev/null || true
+
+.SUFFIXES: .ft .pa
+
+%.pa: %.ft
+	tools/moet $< $@
