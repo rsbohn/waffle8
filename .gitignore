@@ -16,5 +16,6 @@ disk/*
 extracted_*/*
 magtape/*
 media/*
+tu56/*
 tests/pdp8_tests
 trace-args

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 #include "pdp8.h"
 #include "pdp8_board.h"
+#include "tc08_device.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -432,6 +433,15 @@ int pdp8_api_attach_board(pdp8_t *cpu, const pdp8_board_spec *spec) {
 
     cpu->board = spec;
     pdp8_api_reset(cpu);
+    // Attach TC08 device (device code 074)
+    pdp8_tc08_device_t *tc08 = pdp8_tc08_device_create();
+    if (!tc08) {
+        return -1;
+    }
+    if (pdp8_tc08_device_attach(cpu, tc08) != 0) {
+        pdp8_tc08_device_destroy(tc08);
+        return -1;
+    }
     return 0;
 }
 
