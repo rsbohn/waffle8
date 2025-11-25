@@ -27,15 +27,15 @@ LOADER,
 CONFIG,
     CLL CLA
     OSR
-    IOT 6701
+    IOT 6501
     TAD P_READY
     DCA THERE
     JMS I _PUTS
     HLT
 DO_LOAD,
-    IOT 6710        / SKIP if ready
+    IOT 6510        / SKIP if ready
     JMP LOAD_DONE
-    IOT 6702        / read word
+    IOT 6502        / read word
     DCA I THERE
     JMP DO_LOAD
 LOAD_DONE,

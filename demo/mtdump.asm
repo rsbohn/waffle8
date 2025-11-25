@@ -4,18 +4,18 @@
         *0200
 
 START,  CLA CLL                 / Select unit 0
-        IOT 6701                / Select unit
-        IOT 6720                / Rewind to start
+        IOT 6501                / Select unit
+        IOT 6520                / Rewind to start
         
         CLA CLL
         TAD WCOUNT
         DCA COUNTER             / Initialize words-per-line counter
 
 READ_LOOP,
-        IOT 6710                / Skip if tape ready
+        IOT 6510                / Skip if tape ready
         JMP READ_DONE           / End of tape
         
-        IOT 6702                / Read word into AC
+        IOT 6502                / Read word into AC
         JMS PRINT_OCTAL         / Print it in octal
         
         CLA CLL

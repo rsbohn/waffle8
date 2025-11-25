@@ -16,11 +16,11 @@ import ctypes
 import sys
 from pathlib import Path
 
-MAGTAPE_INSTR_GO = 0o6701
-MAGTAPE_INSTR_READ = 0o6702
-MAGTAPE_INSTR_WRITE = 0o6704
-MAGTAPE_INSTR_SKIP = 0o6710
-MAGTAPE_INSTR_SENSE = 0o6740
+MAGTAPE_INSTR_GO = 0o6501
+MAGTAPE_INSTR_READ = 0o6502
+MAGTAPE_INSTR_WRITE = 0o6504
+MAGTAPE_INSTR_SKIP = 0o6510
+MAGTAPE_INSTR_SENSE = 0o6540
 
 MAGTAPE_STATUS_READY = 0x0001
 MAGTAPE_STATUS_ERROR = 0x0002
@@ -119,10 +119,10 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("seek", help="Run seek test to list all records on magtape unit 0")
 
     # Ready subcommand
-    subparsers.add_parser("ready", help="Test IOT 6710 (SKIP) instruction ready status detection")
+    subparsers.add_parser("ready", help="Test IOT 6510 (SKIP) instruction ready status detection")
 
     # Read subcommand
-    subparsers.add_parser("read", help="Test IOT 6710/6702 to read and display current record words")
+    subparsers.add_parser("read", help="Test IOT 6510/6502 to read and display current record words")
 
     # Write subcommand
     subparsers.add_parser("write", help="Test IOT 6704 to append a record on magtape unit 1")
@@ -465,7 +465,7 @@ def test_write_record(
     unit_path: Path,
     unit: int = 1,
 ) -> None:
-    """Write a small record to the specified unit using IOT 6704."""
+    """Write a small record to the specified unit using IOT 6504."""
 
     unit_path.mkdir(parents=True, exist_ok=True)
 

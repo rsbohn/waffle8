@@ -100,7 +100,7 @@ START,  CLA CLL
 
         CLA CLL
         TAD UNIT_NUM
-        IOT 6701                / Select magtape unit (GO)
+        IOT 6501                / Select magtape unit (GO)
 
         CLA
         DCA HEADER_BAD
@@ -411,9 +411,9 @@ DONE,   HLT
 READ_HDR,
         0
 RH_LOOP,
-        IOT 6710                / Skip if word ready
+        IOT 6510                / Skip if word ready
         JMP RH_ERROR            / No more data - bad header
-        IOT 6702                / Read word directly
+        IOT 6502                / Read word directly
         DCA I HDR_PTR
         ISZ WORDS_LEFT
         JMP RH_LOOP
@@ -426,9 +426,9 @@ RH_ERROR,
 READWORD,
         0
 RD_WAIT,
-        IOT 6710                / Skip when word is ready
+        IOT 6510                / Skip when word is ready
         JMP RD_WAIT
-        IOT 6702                / Read word into AC
+        IOT 6502                / Read word into AC
         JMP I READWORD
 
         *1720
@@ -637,9 +637,9 @@ CMP6_NE,
 ASCII_PAYLOAD,
         0
 ASCII_LOOP,
-        IOT 6710                / Skip if word ready
+        IOT 6510                / Skip if word ready
         JMP ASCII_DONE
-        IOT 6702                / Read word directly
+        IOT 6502                / Read word directly
         AND ASCII_MASK
         DCA CHAR_TEMP
         CLA
@@ -654,9 +654,9 @@ BINARY_PAYLOAD,
         CLA
         DCA BIN_WORD_COUNT
 BINARY_LOOP,
-        IOT 6710
+        IOT 6510
         JMP BINARY_DONE
-        IOT 6702
+        IOT 6502
         DCA WORD_TEMP
 
         CLA
@@ -694,9 +694,9 @@ BP_NO_TRAIL,
 SIXBIT_PAYLOAD,
         0
 SIX_LOOP,
-        IOT 6710                / Skip if word ready
+        IOT 6510                / Skip if word ready
         JMP SIX_DONE
-        IOT 6702                / Read word directly
+        IOT 6502                / Read word directly
         DCA WORD_TEMP
         CLA
         TAD WORD_TEMP

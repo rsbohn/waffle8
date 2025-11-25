@@ -56,8 +56,8 @@ P_PUTCH,          PUTCH
         *0200
 START,  CLA CLL
         TAD UNIT_ONE
-        IOT 6701            / Select magtape unit 1
-        IOT 6720            / Ensure previous record (if any) is closed
+        IOT 6501            / Select magtape unit 1
+        IOT 6520            / Ensure previous record (if any) is closed
 
         CLA CLL             / Optional start block override via switches
         OSR                 / OR switch register into AC
@@ -87,7 +87,7 @@ BEGIN_COPY,
         JMP BEGIN_COPY
 
 FINISH,
-        IOT 6720            / Flush and close magtape record
+        IOT 6520            / Flush and close magtape record
         HLT
 
 /------------------------------------------------------------
@@ -126,7 +126,7 @@ CB_NO_DATA,
 WRITE_WORD, 0
         CLA CLL
         TAD TAPEWD
-        IOT 6704            / Write word to magtape
+        IOT 6504            / Write word to magtape
         JMP I WRITE_WORD
 
 /------------------------------------------------------------

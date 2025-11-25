@@ -13,7 +13,7 @@ struct pdp8;
 typedef struct pdp8 pdp8_t;
 typedef struct pdp8_magtape_device pdp8_magtape_device_t;
 
-#define PDP8_MAGTAPE_DEVICE_CODE 070u
+#define PDP8_MAGTAPE_DEVICE_CODE 050u
 #define PDP8_MAGTAPE_IOT_BASE \
     (06000u | ((uint16_t)(PDP8_MAGTAPE_DEVICE_CODE & 0x3Fu) << 3))
 #define PDP8_MAGTAPE_BIT_GO 0x01u

@@ -47,7 +47,7 @@ START,  CLA CLL
         IOT 6552
         CLA CLL
         TAD UNIT1
-        IOT 6701                / Select unit 1 (GO)
+        IOT 6501                / Select unit 1 (GO)
 
         / Setup to read 6 header words into HEADER buffer
         CLA CLL
@@ -104,9 +104,9 @@ PEOL,	PRINT_CRLF
 READWORD,
         0
 RD_WAIT,
-        IOT 6710                / Skip when word is ready
+        IOT 6510                / Skip when word is ready
         JMP RD_WAIT
-        IOT 6702                / Read word into AC
+        IOT 6502                / Read word into AC
         JMP I READWORD
 
 STORE_PAIR,

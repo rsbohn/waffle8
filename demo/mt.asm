@@ -62,8 +62,8 @@ START,  CLA CLL
 
         CLA CLL
         TAD UNIT_NUM
-        IOT 6701                / GO: latch unit number
-        IOT 6720                / Rewind to start of tape
+        IOT 6501                / GO: latch unit number
+        IOT 6520                / Rewind to start of tape
 
         CLA CLL
         TAD HEADER_ADDR
@@ -203,9 +203,9 @@ BAD_HEADER,
 READWORD,
         0
 RD_WAIT,
-        IOT 6710                / Skip when ready
+        IOT 6510                / Skip when ready
         JMP RD_WAIT
-        IOT 6702                / Read word into AC
+        IOT 6502                / Read word into AC
         JMP I READWORD
 
         *0400

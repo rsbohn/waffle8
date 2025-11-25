@@ -7,7 +7,7 @@
 
 START,  CLA CLL                 / Clear AC and Link
         IAC                     / AC = 1
-        IOT 6701                / Select mag tape unit 1
+        IOT 6501                / Select mag tape unit 1
 
         / Initialize - copy 30 words starting at 0200
         TAD NEG_COUNT           / Load -30 (to copy 30 words)
@@ -23,12 +23,12 @@ COPY_LOOP,
         
         / Wait for magtape ready
 WAIT_READY,
-        IOT 6710                / Skip if magtape ready
+        IOT 6510                / Skip if magtape ready
         JMP WAIT_READY          / Wait until ready
         
         / Read word from memory and write to tape
         TAD I 0017           / Load word from memory (auto-increments SRC_PTR)
-        IOT 6704                / Write AC to magtape unit 1
+        IOT 6504                / Write AC to magtape unit 1
         
         JMP COPY_LOOP           / Continue loop
 
@@ -36,8 +36,8 @@ COPY_DONE,
         / Signal completion
         CLA CLL
         TAD DONE_MSG            / Load completion indicator
-        IOT 6704                / Write completion marker to tape
-        IOT 6720                / Rewind to close and flush file
+        IOT 6504                / Write completion marker to tape
+        IOT 6520                / Rewind to close and flush file
         HLT                     / Halt program
 
 / Constants and variables

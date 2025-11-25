@@ -22,16 +22,20 @@ device magtape1 {
 ```
 
 ## IOT Instructions
-The magtape uses device code **070** (octal) with these operations:
+
+## Device Code
+The magtape now uses device code **050** (octal) with these operations:
+
+> **Note:** Device code **074** (octal) and IOT 6740 are reserved for the TC08 controller.
 
 | Octal | Binary | Name    | Description                           |
 |-------|--------|---------|---------------------------------------|
-| 6701  | 001    | GO      | Start/continue operation              |
-| 6702  | 010    | READ    | Read data from tape to AC             |
-| 6704  | 100    | WRITE   | Write data from AC to tape            |
-| 6710  | 001000 | SKIP    | Skip if tape ready                    |
-| 6720  | 010000 | REWIND  | Rewind tape to beginning              |
-| 6740  | 100000 | SENSE   | Read status into AC                   |
+| 6501  | 001    | GO      | Start/continue operation              |
+| 6502  | 010    | READ    | Read data from tape to AC             |
+| 6504  | 100    | WRITE   | Write data from AC to tape            |
+| 6510  | 001000 | SKIP    | Skip if tape ready                    |
+| 6520  | 010000 | REWIND  | Rewind tape to beginning              |
+| 6540  | 100000 | SENSE   | Read status into AC                   |
 
 ## Monitor Commands
 
@@ -64,9 +68,9 @@ magtape new 1            # Start new output file on unit 1
 ```assembly
         / Read a word from magtape unit 0
 READ_WORD,
-        IOT 6710        / Skip if ready
+        IOT 6510        / Skip if ready
         JMP READ_WORD   / Wait until ready
-        IOT 6702        / Read word into AC
+        IOT 6502        / Read word into AC
         / AC now contains the word from tape
 ```
 
@@ -74,20 +78,20 @@ READ_WORD,
 ```assembly
         / Write a word to magtape unit 1
 WRITE_WORD,
-        IOT 6710        / Skip if ready
+        IOT 6510        / Skip if ready
         JMP WRITE_WORD  / Wait until ready
         TAD DATA        / Load data to write
-        IOT 6704        / Write AC to tape
+        IOT 6504        / Write AC to tape
 ```
 
 ### Complete Read Loop
 ```assembly
         / Read all records from demo unit
-        IOT 6720        / Rewind to beginning
+        IOT 6520        / Rewind to beginning
 READ_LOOP,
-        IOT 6710        / Skip if ready
+        IOT 6510        / Skip if ready
         JMP READ_DONE   / Not ready = end of tape
-        IOT 6702        / Read word
+        IOT 6502        / Read word
         / Process word in AC here
         JMP READ_LOOP
 READ_DONE,

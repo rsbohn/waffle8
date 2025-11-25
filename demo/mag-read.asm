@@ -4,12 +4,12 @@
         * 0100
 READ_BACK,
         CLA CLL             / Select unit 0 (demo files)
-        IOT 6701            / Select unit  
-        IOT 6720            / Rewind to start
+        IOT 6501            / Select unit  
+        IOT 6520            / Rewind to start
 READ_LOOP,
-        IOT 6710            / Skip if ready
+        IOT 6510            / Skip if ready
         JMP READ_DONE       / End of tape
-        IOT 6702            / Read word into AC
+        IOT 6502            / Read word into AC
         / send to PRN
 PRINT_WAIT,
         IOT 6601                / Skip when printer ready
