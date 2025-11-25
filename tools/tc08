@@ -7,87 +7,159 @@ Usage:
 
 Prints the contents of the specified block in 8-word groups:
 <offset>: <word0> <word1> ... <word7>
+
+The tape format:
+- two twelve-bit words in a 24-bit little-endian byte sequence
+- 129 words per block
+- DIRECTORY is in block 1
+
 """
 import sys
 import struct
 import os
 
-def read_block(image_path, block_num):
-    BLOCK_SIZE_WORDS = 512
-    WORD_SIZE = 2
+def sixbit_char(val):
+    c = val & 0x3F
+    if c == 0:
+        return ' '
+    elif 1 <= c <= 26:
+        return chr(ord('A') + c - 1)
+    elif 27 <= c <= 36:
+        return chr(ord('0') + c - 27)
+    elif c == 46:
+        return '.'
+    else:
+        return '_'
+
+def print_sixbit_pairs(words):
+    for i in range(0, len(words), 8):
+        chunk = words[i:i+8]
+        chars = []
+        for w in chunk:
+            hi = sixbit_char((w >> 6) & 0x3F)
+            lo = sixbit_char(w & 0x3F)
+            chars.append(f"{hi}{lo}")
+        chunk_str = ' '.join(chars)
+        print(f"{i:04o}: {chunk_str}")
+
+def unpack_24bit_block(data):
+    # Each block is 129 12-bit words, packed as 24-bit little-endian sequences (3 bytes = 2 words)
+    if len(data) != 194:  # 129 words * 12 bits = 1548 bits = 194 bytes (rounded up)
+        # Actually, 129*12 = 1548 bits = 193.5 bytes, so 194 bytes
+        raise ValueError("Block must be exactly 194 bytes (129*12 bits packed)")
+    words = []
+    i = 0
+    while len(words) < 129:
+        if i+2 >= len(data):
+            break
+        b0 = data[i]
+        b1 = data[i+1]
+        b2 = data[i+2]
+        w1 = ((b1 & 0x0F) << 8) | b0
+        w2 = (b2 << 4) | ((b1 & 0xF0) >> 4)
+        words.append(w1 & 0xFFF)
+        if len(words) < 129:
+            words.append(w2 & 0xFFF)
+        i += 3
+    return words
+
+def read_block(image_path, block_num, sixbit_mode=False):
+    BLOCK_SIZE_WORDS = 129
+    PACKED_BLOCK_SIZE = 194
     block_num = int(block_num)
-    offset = block_num * BLOCK_SIZE_WORDS * WORD_SIZE
+    offset = block_num * PACKED_BLOCK_SIZE
     with open(image_path, 'rb') as f:
         f.seek(offset)
-        data = f.read(BLOCK_SIZE_WORDS * WORD_SIZE)
-        if len(data) < BLOCK_SIZE_WORDS * WORD_SIZE:
+        data = f.read(PACKED_BLOCK_SIZE)
+        if len(data) < PACKED_BLOCK_SIZE:
             print(f"Block {block_num} is incomplete or past end of file.", file=sys.stderr)
             sys.exit(1)
-        words = struct.unpack('<' + 'H'*BLOCK_SIZE_WORDS, data)
-        for i in range(0, BLOCK_SIZE_WORDS, 8):
-            chunk = words[i:i+8]
-            chunk_str = ' '.join(f"{w:04o}" for w in chunk)
-            print(f"{i:04o}: {chunk_str}")
+        words = unpack_24bit_block(data)
+        if sixbit_mode:
+            print_sixbit_pairs(words)
+        else:
+            for i in range(0, BLOCK_SIZE_WORDS, 8):
+                chunk = words[i:i+8]
+                chunk_str = ' '.join(f"{w:04o}" for w in chunk)
+                print(f"{i:04o}: {chunk_str}")
+    
 
 
 # Move print_os8_directory above main()
 def print_os8_directory(image_path, dir_block=1):
-    BLOCK_SIZE_WORDS = 512
-    WORD_SIZE = 2
-    offset = dir_block * BLOCK_SIZE_WORDS * WORD_SIZE
+    BLOCK_SIZE_WORDS = 129
+    PACKED_BLOCK_SIZE = 194
+    offset = dir_block * PACKED_BLOCK_SIZE
     with open(image_path, 'rb') as f:
         f.seek(offset)
-        data = f.read(BLOCK_SIZE_WORDS * WORD_SIZE)
-        if len(data) < BLOCK_SIZE_WORDS * WORD_SIZE:
+        data = f.read(PACKED_BLOCK_SIZE)
+        if len(data) < PACKED_BLOCK_SIZE:
             print(f"Directory block {dir_block} is incomplete or past end of file.", file=sys.stderr)
             sys.exit(1)
-        words = struct.unpack('<' + 'H'*BLOCK_SIZE_WORDS, data)
+        words = unpack_24bit_block(data)
         print("OS/8 Directory (block %d):" % dir_block)
         print("  FILE      EXT  START  LENGTH FLAGS")
         for i in range(0, BLOCK_SIZE_WORDS, 6):
             entry = words[i:i+6]
             if all(w == 0 for w in entry):
                 continue
-            def sixbit_to_ascii(word, count):
-                chars = []
-                for j in range(count):
-                    c = (word >> (6 * (count - 1 - j))) & 0x3F
-                    if c == 0:
-                        chars.append(' ')
-                    elif 1 <= c <= 26:
-                        chars.append(chr(ord('A') + c - 1))
-                    elif 27 <= c <= 36:
-                        chars.append(chr(ord('0') + c - 27))
-                    else:
-                        chars.append('_')
-                return ''.join(chars)
-            filename = sixbit_to_ascii(entry[0], 2) + sixbit_to_ascii(entry[1] >> 6, 2) + sixbit_to_ascii(((entry[1] & 0x3F) << 6) | (entry[2] >> 6), 2)
-            ext = sixbit_to_ascii(entry[2], 2)[:2] + sixbit_to_ascii(entry[3] >> 6, 1)
-            start = entry[3] & 0x3FF
-            length = entry[4] & 0x3FF
+            # OS/8 directory entry format:
+            # Words 0 and 1: 9 filename chars (6 bits each), then 3 extension chars (6 bits each)
+            # Pack words 0 and 1 into a 36+18=54 bit bitstream
+            bitstream = (entry[0] << 16) | entry[1]
+            def sixbit_unpack(val):
+                c = val & 0x3F
+                if c == 0:
+                    return ' '
+                elif 1 <= c <= 26:
+                    return chr(ord('A') + c - 1)
+                elif 27 <= c <= 36:
+                    return chr(ord('0') + c - 27)
+                else:
+                    return '_'
+            # Extract 9 filename chars (bits 53-0)
+            filename = ''
+            for n in range(9):
+                shift = 54 - 6 * (n + 1)
+                filename += sixbit_unpack((bitstream >> shift) & 0x3F)
+            # Extract 3 extension chars (bits 17-0)
+            ext = ''
+            for n in range(3):
+                shift = 18 - 6 * (n + 1)
+                ext += sixbit_unpack((bitstream >> shift) & 0x3F)
+            start = entry[2] & 0x0FFF
+            length = entry[3] & 0x0FFF
             flags = entry[5]
+            filename = filename.rstrip()
+            ext = ext.rstrip()
             if filename.strip() == '' and ext.strip() == '':
                 continue
-            print(f"  {filename:<8} {ext:<3} {start:5o}  {length:6o}  {flags:04o}")
+            print(f"  {filename:<9} {ext:<3} {start:5o}  {length:6o}  {flags:04o}")
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: tc08 read <tape-image> <block> | tc08 dir <tape-image>", file=sys.stderr)
-        sys.exit(2)
-    if sys.argv[1] == 'read' and len(sys.argv) == 4:
-        _, _, image_path, block = sys.argv
-        if not os.path.isfile(image_path):
-            print(f"File not found: {image_path}", file=sys.stderr)
+    import argparse
+    parser = argparse.ArgumentParser(description="TC08 magtape utility")
+    subparsers = parser.add_subparsers(dest="command")
+    read_parser = subparsers.add_parser("read", help="Read and print a block")
+    read_parser.add_argument("image", help="Tape image file")
+    read_parser.add_argument("block", type=int, help="Block number")
+    read_parser.add_argument("-s", "--sixbit", action="store_true", help="Print each word as two sixbit chars")
+    dir_parser = subparsers.add_parser("dir", help="Print OS/8 directory entries")
+    dir_parser.add_argument("image", help="Tape image file")
+    args = parser.parse_args()
+
+    if args.command == "read":
+        if not os.path.isfile(args.image):
+            print(f"File not found: {args.image}", file=sys.stderr)
             sys.exit(1)
-        read_block(image_path, block)
-    elif sys.argv[1] == 'dir' and len(sys.argv) == 3:
-        _, _, image_path = sys.argv
-        if not os.path.isfile(image_path):
-            print(f"File not found: {image_path}", file=sys.stderr)
+        read_block(args.image, args.block, sixbit_mode=args.sixbit)
+    elif args.command == "dir":
+        if not os.path.isfile(args.image):
+            print(f"File not found: {args.image}", file=sys.stderr)
             sys.exit(1)
-        print_os8_directory(image_path)
+        print_os8_directory(args.image)
     else:
-        print("Usage: tc08 read <tape-image> <block> | tc08 dir <tape-image>", file=sys.stderr)
+        parser.print_help()
         sys.exit(2)
 
 if __name__ == "__main__":
