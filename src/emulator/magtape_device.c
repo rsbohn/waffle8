@@ -949,7 +949,8 @@ int pdp8_magtape_device_attach(pdp8_t *cpu, pdp8_magtape_device_t *device) {
     if (!cpu || !device) {
         return -1;
     }
-    static const uint8_t device_codes[] = {070u, 071u, 072u, 073u, 074u, 075u, 076u, 077u};
+/* Reserve 076/077 for TC08 DECtape; host magtape uses the remaining slots. */
+static const uint8_t device_codes[] = {070u, 071u, 072u, 073u, 074u, 075u};
     for (size_t i = 0; i < sizeof(device_codes) / sizeof(device_codes[0]); ++i) {
         if (pdp8_api_register_iot(cpu, device_codes[i], magtape_device_iot, device) != 0) {
             return -1;

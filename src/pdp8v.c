@@ -704,6 +704,10 @@ static void wait_for_exit_prompt(const char *message) {
 int main(int argc, char **argv) {
     const char *startup_image = NULL;
     const char *paper_tape_mount = NULL;
+    const char *tc08_image_path = NULL;
+    const char *tc08_image1_path = NULL;
+    bool tc08_image_from_cli = false;
+    bool tc08_image1_from_cli = false;
 
     /* Argument parsing: handle --turbo flag, optional --mount path, and optional .srec file */
     pdp8v_set_frequency(10.0);
@@ -732,19 +736,40 @@ int main(int argc, char **argv) {
             }
             pdp8v_set_frequency(hz);
             ++i;
+        } else if (strncmp(argv[i], "dt0=", 4) == 0) {
+            tc08_image_path = argv[i] + 4;
+            tc08_image_from_cli = true;
+        } else if (strncmp(argv[i], "dt1=", 4) == 0) {
+            tc08_image1_path = argv[i] + 4;
+            tc08_image1_from_cli = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("PDP-8 Virtual Machine\n");
-            printf("Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [image.srec]\n", argv[0]);
+            printf("Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [dt0=<tu56>] [dt1=<tu56>] [image.srec]\n", argv[0]);
             printf("  --turbo        Run headless at 1000 Hz (overrides --hz)\n");
             printf("  --hz RATE      Set target frequency in Hz (default: 10)\n");
             printf("  --mount PATH   Attach paper tape image at PATH to device 667x\n");
+            printf("  dt0=PATH       Load TC08 DECtape image at PATH (sets TC08_IMAGE0)\n");
+            printf("  dt1=PATH       Load TC08 DECtape image for unit 1 (sets TC08_IMAGE1)\n");
             printf("  image.srec     Optional S-record file to load and execute\n");
             return EXIT_SUCCESS;
         } else if (startup_image == NULL) {
             startup_image = argv[i];
         } else {
-            fprintf(stderr, "Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [image.srec]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [--turbo] [--hz <rate>] [--mount <paper.tape>] [dt0=<tu56>] [dt1=<tu56>] [image.srec]\n", argv[0]);
             fprintf(stderr, "Use --help for more information\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    if (tc08_image_from_cli && tc08_image_path && *tc08_image_path) {
+        if (setenv("TC08_IMAGE0", tc08_image_path, 1) != 0) {
+            fprintf(stderr, "Unable to set TC08_IMAGE0: %s\n", strerror(errno));
+            return EXIT_FAILURE;
+        }
+    }
+    if (tc08_image1_from_cli && tc08_image1_path && *tc08_image1_path) {
+        if (setenv("TC08_IMAGE1", tc08_image1_path, 1) != 0) {
+            fprintf(stderr, "Unable to set TC08_IMAGE1: %s\n", strerror(errno));
             return EXIT_FAILURE;
         }
     }
@@ -795,6 +820,21 @@ int main(int argc, char **argv) {
                                               NULL);
     }
 
+    const char *tc08_selected = tc08_image_path;
+    if (!tc08_selected || *tc08_selected == '\0') {
+        tc08_selected = getenv("TC08_IMAGE0");
+    }
+    if (!tc08_selected || *tc08_selected == '\0') {
+        tc08_selected = "media/boot-tc08.tu56";
+    }
+    const char *tc08_selected1 = tc08_image1_path;
+    if (!tc08_selected1 || *tc08_selected1 == '\0') {
+        tc08_selected1 = getenv("TC08_IMAGE1");
+    }
+    if (!tc08_selected1 || *tc08_selected1 == '\0') {
+        tc08_selected1 = "magtape/tc08-unit1.tu56";
+    }
+
     const char *paper_tape_image = NULL;
     bool paper_tape_from_config = false;
     if (paper_tape_mount && *paper_tape_mount) {
@@ -834,6 +874,20 @@ int main(int argc, char **argv) {
                      paper_tape_image);
             monitor_console_puts(msg);
         }
+    }
+
+    char tc08_msg[256];
+    snprintf(tc08_msg, sizeof tc08_msg, "TC08 DECtape unit0 (RO): %s", tc08_selected);
+    if (g_turbo_mode) {
+        printf("%s\n", tc08_msg);
+    } else {
+        monitor_console_puts(tc08_msg);
+    }
+    snprintf(tc08_msg, sizeof tc08_msg, "TC08 DECtape unit1 (RW): %s", tc08_selected1);
+    if (g_turbo_mode) {
+        printf("%s\n", tc08_msg);
+    } else {
+        monitor_console_puts(tc08_msg);
     }
 
     /* Show initial startup message */

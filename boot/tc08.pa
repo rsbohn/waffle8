@@ -2,11 +2,11 @@
 / from TC08SY.PA
 / Dexter S. 2025-11-25
 
-/ IOT Pseudo-ops
-DTCA= 6741
-DTXA= 6742
-DTSF= 6744
-DTLB= 6746
+/ IOT Pseudo-ops (device 076/077)
+DTCA= 6762   / Clear/reset (device 076, func 2)
+DTXA= 6771   / Load transfer address (device 077, func 1)
+DTSF= 6764   / Skip if ready (device 076, func 4)
+DTLB= 6766   / Load block/start transfer (device 076, func 6)
 NOP = 7000
 /#show-table
 
@@ -43,7 +43,7 @@ B7577,  7577
 B10,    10
 B600,   600
 B620,   620
-        * 07642
+        * 7642
         DCA 7744
         DTSF
         JMP .-1

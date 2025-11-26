@@ -35,6 +35,7 @@ void pdp8_api_request_skip(pdp8_t *cpu);
 void pdp8_api_set_switch_register(pdp8_t *cpu, uint16_t value);
 uint16_t pdp8_api_get_switch_register(const pdp8_t *cpu);
 int pdp8_api_is_halted(const pdp8_t *cpu);
+size_t pdp8_api_get_memory_words(const pdp8_t *cpu);
 
 /* Interrupt support - PDP-8 single interrupt line model
  *

@@ -341,6 +341,16 @@ static void show_devices(const struct monitor_runtime *runtime) {
     monitor_console_printf("    enabled          : %s\n", punch_enabled ? "yes" : "no");
     monitor_console_printf("    output           : %s\n", punch_output);
 
+    monitor_console_puts("  TC08 DECtape");
+    monitor_console_puts("    device code      : 076x/077x");
+    const char *tc08_image0 = getenv("TC08_IMAGE0");
+    const char *tc08_image1 = getenv("TC08_IMAGE1");
+    monitor_console_printf("    unit 0 (RO)      : %s\n",
+                           tc08_image0 ? tc08_image0 : "media/boot-tc08.tu56");
+    monitor_console_printf("    unit 1 (RW)      : %s\n",
+                           tc08_image1 ? tc08_image1 : "magtape/tc08-unit1.tu56");
+    monitor_console_puts("    status           : ready (minimal model)");
+
     /* Watchdog device (configured via pdp8.config)
      * Print only when the watchdog stanza is present; otherwise show not-configured.
      */
@@ -809,6 +819,23 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
                                                   char **state);
+static enum monitor_command_status command_tc08(struct monitor_runtime *runtime,
+                                                char **state) {
+    (void)state;
+    if (!runtime) {
+        return MONITOR_COMMAND_ERROR;
+    }
+    monitor_console_puts("TC08 DECtape controller");
+    monitor_console_puts("  device code      : 076x/077x");
+    const char *tc08_image0 = getenv("TC08_IMAGE0");
+    const char *tc08_image1 = getenv("TC08_IMAGE1");
+    monitor_console_printf("  unit 0 (RO)      : %s\n",
+                           tc08_image0 ? tc08_image0 : "media/boot-tc08.tu56");
+    monitor_console_printf("  unit 1 (RW)      : %s\n",
+                           tc08_image1 ? tc08_image1 : "magtape/tc08-unit1.tu56");
+    monitor_console_puts("  status           : ready (minimal model)");
+    return MONITOR_COMMAND_OK;
+}
 static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
                                                  char **state);
 static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
@@ -842,6 +869,11 @@ static const struct monitor_command monitor_commands[] = {
      command_magtape,
      "magtape <unit> <rewind|new|next>",
      "Control magnetic tape units (see 'show magtape').",
+     true},
+    {"tc08",
+     command_tc08,
+     "tc08 status",
+     "Show TC08 DECtape controller status (ready/error and image).",
      true},
     {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
 };
@@ -1379,6 +1411,18 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
 
     if (strcmp(topic, "devices") == 0) {
         show_devices(runtime);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(topic, "tc08") == 0) {
+        monitor_console_puts("TC08 DECtape controller");
+        monitor_console_puts("  device code      : 076x/077x");
+        const char *tc08_image0 = getenv("TC08_IMAGE0");
+        const char *tc08_image1 = getenv("TC08_IMAGE1");
+        monitor_console_printf("  unit 0 (RO)      : %s\n",
+                               tc08_image0 ? tc08_image0 : "media/boot-tc08.tu56");
+        monitor_console_printf("  unit 1 (RW)      : %s\n",
+                               tc08_image1 ? tc08_image1 : "magtape/tc08-unit1.tu56");
         return MONITOR_COMMAND_OK;
     }
 

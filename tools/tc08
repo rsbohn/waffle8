@@ -94,6 +94,9 @@ def print_os8_directory(image_path, dir_block=1):
         entry_len = 6  # 6 words per entry: 0-2 filename, 3 ext, 4-5 attrs
         for i in range(7, BLOCK_SIZE_WORDS - entry_len + 1, entry_len):
             entry = words[i:i+entry_len]
+            # OS/8 leaves unused directory slots zeroed in the first name word; stop once we hit the first empty slot
+            if entry[0] == 0:
+                break
             filename = sixbit_pair(entry[0]) + sixbit_pair(entry[1]) + sixbit_pair(entry[2])
             filename = filename.rstrip()
             ext = sixbit_pair(entry[3]).rstrip()

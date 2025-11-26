@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
 #define PDP8_WORD_MASK 0x0FFFu
 #define PDP8_LINK_MASK 0x01u
@@ -495,6 +496,10 @@ uint16_t pdp8_api_read_mem(const pdp8_t *cpu, uint16_t address) {
         return 0u;
     }
     return read_effective_word(cpu, address);
+}
+
+size_t pdp8_api_get_memory_words(const pdp8_t *cpu) {
+    return cpu ? cpu->memory_words : 0u;
 }
 
 int pdp8_api_load(pdp8_t *cpu, const uint16_t *words, size_t count, uint16_t start_address) {
