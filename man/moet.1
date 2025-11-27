@@ -1,0 +1,104 @@
+.\" moet(1) manual page
+.TH MOET 1 "November 2025" "waffle8" "User Commands"
+.
+.SH NAME
+moet \- expand .ft macro sources into PAL8-style assembly
+.
+.SH SYNOPSIS
+.B moet
+.RI [ source.ft ]
+.RI [ output.pa ]
+.
+.SH DESCRIPTION
+.B moet
+translates the project’s .ft macro sources into plain PAL8-style assembly (.pa).
+It understands a small macro language used by the PDP-8 examples in this tree and emits code compatible with
+.BR 8asm (1).
+If no output is given, the suffix of
+.I source.ft
+is replaced with
+.IR .pa .
+.
+.SS Syntax
+Lines starting with
+.B /
+are comments.
+Blank lines pass through unchanged.
+Tokens are case-insensitive unless quoted.
+.
+.TP
+.BI BASE " addr"
+Sets the current origin, emitting
+.BI * addr
+in the output.
+.
+.TP
+.BI USE " file"
+Includes another .ft file from the same directory (case-insensitive).
+.
+.TP
+.BI :NAME " [ body ]"
+Defines a macro named
+.I NAME
+; occurrences of NAME expand inline to
+.IR body .
+.
+.TP
+.BI :NAME " body ;"
+Defines a callable subroutine.
+In the output this becomes:
+.IP
+.EX
+NAME, 0
+    <expanded body>
+    JMP I NAME
+NAME_T0, 0    (locals as needed)
+.EE
+.IP
+Bare occurrences of NAME in code are rewritten to
+.BR JMS " " NAME .
+.
+.TP
+.BI @SYM
+Expands to
+.BR CLA ", " CLL ", " TAD " " SYM .
+.
+.TP
+.BI !SYM
+Expands to
+.BR DCA " " SYM .
+.
+.TP
+.BI PAGE0[ ... ]
+Reserves page-zero entries.
+Each line inside is
+.IR address " " LABEL " [" value "]" .
+moet emits
+.BI * address
+and
+.BI LABEL ", " value
+for each, then restores the prior origin.
+.
+.SS Locals
+Subroutines may reference
+.BR T0 ", " T1 ", …"
+which become
+.BR NAME_T0 ", " NAME_T1 ", …"
+with storage emitted after the routine. Extra locals default to zero.
+.
+.SH EXAMPLES
+Expand a source in place:
+.IP
+.EX
+tools/moet sy/blin2.ft sy/blin2.pa
+.EE
+.
+.SH DIAGNOSTICS
+Exits nonzero on syntax errors, missing includes, or write failures.
+.
+.SH SEE ALSO
+.BR 8asm (1),
+.BR pdp8 (1)
+.
+.SH AUTHOR
+waffle8 contributors

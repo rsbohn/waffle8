@@ -1,16 +1,31 @@
 / making tu56 tape images like it was 1972
 *03000
 
-CLA
-CLL
-TAD .+2
-JMP .+2
-MESS
+CLL CLA
+TAD MESS
 DCA 0010
 JMS PUTS
+CLL CLA CMA
+TAD BUBU
+DCA 0010
+JMS FILL
 HLT
-JMP .-2
+JMP .-4
 
+/ buffer address
+BUBU, 00600
+/ page mask
+MASK, 00377
+FILL, 0
+    DCA I 0010
+    CLL CLA
+    TAD 0010
+    AND MASK
+    SZA
+    JMP FILL+1
+    JMP I FILL
+
+/ PUTS - print a string
 PUTS, 0
     CLL CLA
     TAD I 0010
@@ -29,4 +44,7 @@ MESS, .
 "I"
 "N"
 "G"
+"!"
+00015
+00013
 00000

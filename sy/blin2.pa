@@ -1,0 +1,57 @@
+/ no really, write to the tape already
+*03200
+
+JMS DT1P
+HLT
+JMP .-2
+
+DT1P, 0
+    JMS U1B1
+    CLA CLL
+    TAD MESS
+    JMS PUTS
+    JMP I DT1P
+
+PGE3, 00600
+WFLG, 06001
+U1B1, 0
+    CLA CLL
+    TAD PGE3
+    IOT 6771
+    CLA CLL
+    TAD WFLG
+    IOT 6766
+    JMS DERR
+    IOT 6764
+    JMP .-1
+    JMP I U1B1
+
+PUTS, 0
+    JMS I KPUTS
+    JMP I PUTS
+KPUTS, 3024
+
+DERR, 0
+    CLA CLL
+    TAD MERR
+    JMS PUTS
+    HLT
+    JMP .-1
+    JMP I DERR
+MERR, .
+"D"
+"T"
+00040
+"E"
+"R"
+"R"
+00000
+
+MESS, .
+"D"
+"O"
+"N"
+"E"
+00015
+00013
+00000

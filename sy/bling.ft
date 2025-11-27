@@ -1,14 +1,33 @@
 / making tu56 tape images like it was 1972
 BASE 03000
 
-LIT MESS
+CLL CLA
+TAD MESS
 DCA 0010
 JMS PUTS
+CLL CLA CMA / AC = -1
+TAD BUBU
+DCA 0010
+JMS FILL
 HLT
-JMP .-2
+JMP .-4
+
+:AGAIN [ JMP $COLON_START ]
+/ buffer address
+BUBU: 00600
+/ page mask
+MASK: 00377
+:FILL
+    DCA I 0010
+    CLL CLA
+    TAD 0010
+    AND MASK
+    SZA
+    AGAIN
+;
 
 :SPIN  [ JMP .-1 ]
-:AGAIN [ JMP $COLON_START ]
+/ PUTS - print a string
 :PUTS
     CLL CLA
     TAD I 0010
@@ -22,4 +41,7 @@ JMP .-2
 ;
 
 MESS, .
-"B";"L";"I";"N";"G";00000
+"B";"L";"I";"N";"G";"!"
+00015
+00013
+00000

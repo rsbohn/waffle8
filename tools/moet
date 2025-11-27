@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Optional
+from typing import Dict, Iterable, List, Sequence, Optional, Set
 
 
 class FtError(Exception):
@@ -141,10 +141,11 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             idx += 1
             continue
         
-        # Label definition (ends with comma)
-        if tok.endswith(","):
+        # Label definition (ends with comma or colon)
+        if tok.endswith((",", ":")):
             flush_operate()
-            stmt = [tok]
+            label_tok = tok if tok.endswith(",") else f"{tok[:-1]},"
+            stmt = [label_tok]
             if idx + 1 < len(tokens) and tokens[idx + 1] != ";":
                 stmt.append(tokens[idx + 1])
                 idx += 1
@@ -251,8 +252,8 @@ def resolve_target(name: str, locals_state: LocalState | None) -> str:
     return upper
 
 
-def translate_tokens(tokens: List[str], locals_state: LocalState | None) -> List[str]:
-    """Apply @/! expansions and drop bracket tokens."""
+def translate_tokens(tokens: List[str], locals_state: LocalState | None, callables: Set[str]) -> List[str]:
+    """Apply @/! expansions, auto-JMS callable labels, and drop bracket tokens."""
     out: List[str] = []
     for tok in tokens:
         if tok in {"[", "]"}:
@@ -263,6 +264,9 @@ def translate_tokens(tokens: List[str], locals_state: LocalState | None) -> List
         if tok.startswith("@"):
             target = resolve_target(tok[1:], locals_state)
             out.extend(["CLA", "CLL", "TAD", target])
+            continue
+        if tok in callables:
+            out.extend(["JMS", tok])
             continue
         out.append(tok)
     return out
@@ -298,9 +302,37 @@ def handle_page0(lines: List[str], start_idx: int, output: List[str], file_path:
     raise FtError("Unterminated PAGE0[ block", file_path, start_idx + 1)
 
 
+def collect_callables(path: Path, macros: Dict[str, List[str]], seen: Set[Path] | None = None) -> Set[str]:
+    """Collect colon-defined subroutine names (non-macro) across USE includes."""
+    if seen is None:
+        seen = set()
+    if path in seen:
+        return set()
+    seen.add(path)
+
+    names: Set[str] = set()
+    lines = path.read_text().splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("/"):
+            continue
+        tokens = [map_dot_symbol(tok) for tok in normalize_tokens(tokenize(line))]
+        if not tokens:
+            continue
+        first = tokens[0]
+        if first == "USE" and len(tokens) >= 2:
+            include_path = resolve_use_path(path, tokens[1])
+            names.update(collect_callables(include_path, macros, seen))
+            continue
+        if first.startswith(":") and "[" not in tokens:
+            names.add(map_dot_symbol(first[1:]))
+    return names
+
+
 def process_file(
     path: Path,
     macros: Dict[str, List[str]],
+    callables: Set[str],
     origin_ref: List[str | None] | None = None,
     pending: List[Path] | None = None,
 ) -> List[str]:
@@ -426,7 +458,7 @@ def process_file(
             
             expanded_body = expand_macros(body_tokens, macros, context_file=path, context_line=start_line, colon_label=name)
             locals_state = LocalState(prefix=name)
-            translated_body = translate_tokens(expanded_body, locals_state)
+            translated_body = translate_tokens(expanded_body, locals_state, callables)
             body_lines = tokens_to_lines(translated_body, path, start_line)
             
             output.append(f"{name}, 0")
@@ -449,7 +481,7 @@ def process_file(
         
         # Plain line: expand macros, @/! etc., pass through
         expanded = expand_macros(tokens, macros, context_file=path, context_line=idx + 1)
-        translated = translate_tokens(expanded, locals_state=None)
+        translated = translate_tokens(expanded, locals_state=None, callables=callables)
         for line in tokens_to_lines(translated, path, idx + 1):
             output.append(line)
         idx += 1
@@ -457,7 +489,7 @@ def process_file(
     # Process pending USE targets (LIFO)
     while pending:
         include_path = pending.pop()
-        output.extend(process_file(include_path, macros, origin_ref, pending))
+        output.extend(process_file(include_path, macros, callables, origin_ref, pending))
     
     return output
 
@@ -474,8 +506,9 @@ def main(argv: Sequence[str]) -> int:
         return 1
     
     macros: Dict[str, List[str]] = {}
+    callables = collect_callables(args.source, macros)
     try:
-        expanded_lines = process_file(args.source, macros)
+        expanded_lines = process_file(args.source, macros, callables)
     except FtError as exc:
         print(f"Error: {exc}")
         return 1

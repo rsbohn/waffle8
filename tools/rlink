@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Concatenate PDP-8 SREC ROM images and set a start address."""
+
+import sys
+from typing import Dict, List, Tuple
+
+
+def usage() -> None:
+    print("usage: rlink <START_OCTAL> <rom1> [rom2 ...]", file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_octal(value: str) -> int:
+    try:
+        addr = int(value, 8)
+    except ValueError as exc:
+        raise ValueError(f"invalid octal start address: {value}") from exc
+    if addr < 0:
+        raise ValueError(f"start address out of range: {value}")
+    return addr
+
+
+def checksum(bytes_seq: List[int]) -> int:
+    return (~sum(bytes_seq) & 0xFF)
+
+
+def parse_s1(line: str) -> Tuple[int, List[int]]:
+    if not line.startswith("S1") or len(line) < 10:
+        raise ValueError(f"invalid S1 line: {line}")
+    count = int(line[2:4], 16)
+    address = int(line[4:8], 16)
+    data_hex = line[8:-2]
+    data = [int(data_hex[i:i + 2], 16) for i in range(0, len(data_hex), 2)]
+    calc = checksum([count, (address >> 8) & 0xFF, address & 0xFF] + data)
+    stored = int(line[-2:], 16)
+    if calc != stored:
+        raise ValueError(f"bad checksum in line: {line}")
+    return address, data
+
+
+def make_s9(start: int) -> str:
+    count = 3  # address bytes + checksum
+    bytes_seq = [count, (start >> 8) & 0xFF, start & 0xFF]
+    cs = checksum(bytes_seq)
+    return f"S9{count:02X}{start:04X}{cs:02X}"
+
+
+def main(argv: List[str]) -> int:
+    if len(argv) < 3:
+        usage()
+    try:
+        start_word = parse_octal(argv[1])
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    start = start_word << 1  # SREC uses byte addresses
+    if start > 0xFFFF:
+        print(f"start address too large after byte conversion: {argv[1]}", file=sys.stderr)
+        return 1
+
+    seen: Dict[int, int] = {}
+    output: List[str] = []
+
+    for path in argv[2:]:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("S9"):
+                        continue  # replace with our own start record
+                    if line.startswith("S1"):
+                        address, data = parse_s1(line)
+                        for offset, byte in enumerate(data):
+                            addr = address + offset
+                            if addr in seen and seen[addr] != byte:
+                                print(
+                                    f"overlap at 0x{addr:04X} between files; "
+                                    f"{seen[addr]:02X} vs {byte:02X}",
+                                    file=sys.stderr,
+                                )
+                                return 1
+                            seen[addr] = byte
+                    output.append(line)
+        except OSError as exc:
+            print(f"failed to read {path}: {exc}", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"{path}: {exc}", file=sys.stderr)
+            return 1
+
+    for line in output:
+        print(line)
+    print(make_s9(start))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

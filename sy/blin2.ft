@@ -1,0 +1,51 @@
+/ no really, write to the tape already
+BASE 03200
+
+DT1P
+HLT
+JMP .-2
+
+:SPIN [ JMP .-1 ]
+:DT1P
+    U1B1
+    @MESS
+    DCA 00010
+    PUTS
+;
+
+PGE3: 00600         / page 3 starts at 00600
+WFLG: 06001         / 000 000 000 111  [blk 1][unit 1][/RW]
+:DTSF [ IOT 6764 ]  / skip until ready, AC=1
+:DTLB [ IOT 6766 ]  / block transfer, skip if no error
+:DTXA [ IOT 6771 ]  / load control flag from AC
+:U1B1
+    @PGE3
+    DTXA
+    @WFLG
+    DTLB
+    DERR            / error
+    DTSF            / skip until ready, AC=1
+    SPIN
+;
+
+:PUTS
+    JMS I KPUTS
+;
+KPUTS, 3024
+
+:DERR
+    @MERR
+    DCA 00010
+    PUTS
+    HLT
+    SPIN
+;
+MERR, .
+"D";"T";00040;"E";"R";"R";
+00000
+
+MESS, .
+"D";"O";"N";"E"
+00015
+00013
+00000
