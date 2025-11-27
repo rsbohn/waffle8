@@ -1,0 +1,25 @@
+/ making tu56 tape images like it was 1972
+BASE 03000
+
+LIT MESS
+DCA 0010
+JMS PUTS
+HLT
+JMP .-2
+
+:SPIN  [ JMP .-1 ]
+:AGAIN [ JMP $COLON_START ]
+:PUTS
+    CLL CLA
+    TAD I 0010
+    SZA
+    JMP .+2
+    JMP I PUTS
+    IOT 6041
+    SPIN
+    IOT 6046
+    AGAIN
+;
+
+MESS, .
+"B";"L";"I";"N";"G";00000

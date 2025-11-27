@@ -87,7 +87,8 @@ def expand_macros(
     depth: int = 0, 
     stack: List[str] | None = None,
     context_file: Optional[Path] = None,
-    context_line: Optional[int] = None
+    context_line: Optional[int] = None,
+    colon_label: Optional[str] = None
 ) -> List[str]:
     """Recursively expand macro tokens, stopping on cycles."""
     if stack is None:
@@ -96,12 +97,15 @@ def expand_macros(
         raise FtError("Macro expansion exceeded recursion depth", context_file, context_line)
     out: List[str] = []
     for tok in tokens:
+        if tok == "$COLON_START" and colon_label is not None:
+            out.append(f"{colon_label}+1")
+            continue
         if tok in macros:
             if tok in stack:
                 # Treat recursive/self-referential macros as literals.
                 out.append(tok)
                 continue
-            out.extend(expand_macros(macros[tok], macros, depth + 1, stack + [tok], context_file, context_line))
+            out.extend(expand_macros(macros[tok], macros, depth + 1, stack + [tok], context_file, context_line, colon_label=colon_label))
         else:
             out.append(tok)
     return out
@@ -420,7 +424,7 @@ def process_file(
                 locals_tokens.extend(peek_tokens)
                 idx += 1
             
-            expanded_body = expand_macros(body_tokens, macros, context_file=path, context_line=start_line)
+            expanded_body = expand_macros(body_tokens, macros, context_file=path, context_line=start_line, colon_label=name)
             locals_state = LocalState(prefix=name)
             translated_body = translate_tokens(expanded_body, locals_state)
             body_lines = tokens_to_lines(translated_body, path, start_line)
@@ -430,7 +434,7 @@ def process_file(
                 output.append(f"    {line}")
             output.append(f"    JMP I {name}")
             
-            expanded_locals = expand_macros(locals_tokens, macros, context_file=path, context_line=start_line) if locals_tokens else []
+            expanded_locals = expand_macros(locals_tokens, macros, context_file=path, context_line=start_line, colon_label=name) if locals_tokens else []
             local_values = collect_values(expanded_locals)
             needed = max(locals_state.max_index + 1 if locals_state.max_index >= 0 else 0, len(local_values))
             

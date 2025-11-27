@@ -280,6 +280,7 @@ class PDP8Assembler:
                 location += 1
 
     def _resolve_symbol(self, token: str, line_no: int, text: str, current_address: Optional[int] = None) -> int:
+        # Support relative addressing with .+N or .-N (octal)
         if token.startswith(".") and current_address is not None:
             relative_match = re.fullmatch(r"\.(?:([+-])([0-7]+))?", token.strip())
             if relative_match:
@@ -288,6 +289,23 @@ class PDP8Assembler:
                 if sign == "-":
                     offset = -offset
                 return (current_address + offset) & 0x0FFF
+
+        # Support label arithmetic: LABEL+1, LABEL-1, LABEL+N, LABEL-N (N octal or decimal)
+        label_arith_match = re.fullmatch(r"([A-Za-z0-9_]+)\s*([+-])\s*([0-9]+)", token.strip())
+        if label_arith_match:
+            label, op, offset_str = label_arith_match.groups()
+            label = label.upper()
+            if label not in self.symbols:
+                raise AsmError(f"Unknown symbol '{label}'", line_no, text)
+            base_addr = self.symbols[label]
+            # Try octal first, then decimal fallback
+            try:
+                offset = int(offset_str, 8)
+            except ValueError:
+                offset = int(offset_str, 10)
+            if op == "-":
+                offset = -offset
+            return (base_addr + offset) & 0x0FFF
 
         try:
             return self._parse_number(token)

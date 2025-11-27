@@ -1,0 +1,32 @@
+/ making tu56 tape images like it was 1972
+*03000
+
+CLA
+CLL
+TAD .+2
+JMP .+2
+MESS
+DCA 0010
+JMS PUTS
+HLT
+JMP .-2
+
+PUTS, 0
+    CLL CLA
+    TAD I 0010
+    SZA
+    JMP .+2
+    JMP I PUTS
+    IOT 6041
+    JMP .-1
+    IOT 6046
+    JMP PUTS+1
+    JMP I PUTS
+
+MESS, .
+"B"
+"L"
+"I"
+"N"
+"G"
+00000
