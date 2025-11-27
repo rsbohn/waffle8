@@ -31,7 +31,7 @@ PUTS, 0
     TAD I 0010
     SZA
     JMP .+2
-    JMP I PUTS
+    JMP .+5
     IOT 6041
     JMP .-1
     IOT 6046
