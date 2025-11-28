@@ -41,11 +41,11 @@ KPUTS, 3024
     SPIN
 ;
 MERR, .
-"D";"T";00040;"E";"R";"R";
+TEXT "DT_ERR"
 00000
 
 MESS, .
-"D";"O";"N";"E"
+TEXT "DONE."
 00015
 00013
 00000

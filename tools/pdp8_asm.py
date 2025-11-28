@@ -200,6 +200,21 @@ class PDP8Assembler:
                 upper_tokens = [tok.upper() for tok in tokens]
                 op = upper_tokens[0]
 
+                # TEXT directive: TEXT "...." -> emit each character as an ASCII data word
+                if op == "TEXT":
+                    # locate quoted string in the original part to preserve spaces
+                    m = re.search(r'"([^\"]*)"', part)
+                    if not m:
+                        raise AsmError("TEXT requires a quoted string", line_no, part)
+                    inner = m.group(1)
+                    for ch in inner:
+                        value = ord(ch) & 0x7F
+                        self.statements.append(
+                            Statement("data", location, (value,), line_no, part, raw.rstrip("\n"))
+                        )
+                        location += 1
+                    continue
+
                 # Check pseudo-opcode table first (temporary session ops)
                 if op in PSEUDO_OPS:
                     value = PSEUDO_OPS[op]

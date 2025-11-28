@@ -222,7 +222,16 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             ):
                 flush_operate()
             continue
-        
+
+        # TEXT directive should stay with its following token on the same line
+        if tok == "TEXT":
+            flush_operate()
+            if idx + 1 >= len(tokens) or tokens[idx + 1] == ";":
+                raise FtError("TEXT requires an argument", context_file, context_line)
+            lines.append(f"TEXT {tokens[idx + 1]}")
+            idx += 2
+            continue
+
         # Numeric literal, quoted char, or other token stays as single line
         flush_operate()
         lines.append(tok)
