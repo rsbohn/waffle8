@@ -9,6 +9,7 @@ DT1P, 0
     JMS U1B1
     CLA CLL
     TAD MESS
+    DCA 00010
     JMS PUTS
     JMP I DT1P
 
@@ -34,6 +35,7 @@ KPUTS, 3024
 DERR, 0
     CLA CLL
     TAD MERR
+    DCA 00010
     JMS PUTS
     HLT
     JMP .-1
