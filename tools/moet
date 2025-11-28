@@ -35,15 +35,38 @@ class FtError(Exception):
 
 
 def tokenize(line: str) -> List[str]:
-    """Split a source line into tokens, stripping comments and keeping ; [ ]."""
-    if "/" in line:
-        line = line.split("/", 1)[0]
-    spaced = (
-        line.replace("[", " [ ")
-        .replace("]", " ] ")
-        .replace(";", " ; ")
-    )
-    return spaced.split()
+    """Split a source line into tokens, preserving quoted strings intact."""
+    tokens: List[str] = []
+    buf: List[str] = []
+    in_quote = False
+
+    for ch in line:
+        if not in_quote and ch == "/":
+            break  # comment start
+        if ch == '"':
+            buf.append(ch)
+            in_quote = not in_quote
+            continue
+        if in_quote:
+            buf.append(ch)
+            continue
+        if ch in {"[", "]", ";"}:
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            tokens.append(ch)
+            continue
+        if ch.isspace():
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            continue
+        buf.append(ch)
+
+    if buf:
+        tokens.append("".join(buf))
+
+    return tokens
 
 
 def normalize_tokens(tokens: Iterable[str]) -> List[str]:
@@ -114,6 +137,7 @@ def expand_macros(
 def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, context_line: Optional[int] = None) -> List[str]:
     """Convert a flat token stream (with ;) into PAL source lines."""
     lines: List[str] = []
+    pending_label: Optional[str] = None
     
     # PDP-8 instruction sets
     group1_tokens = {"CLA", "CLL", "CMA", "CML", "RAR", "RAL", "RTR", "RTL", "BSW", "IAC"}
@@ -127,10 +151,18 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
     pending_operate: List[str] = []
     pending_group: Optional[int] = None
     
+    def add_line(stmt: str) -> None:
+        nonlocal pending_label
+        if pending_label:
+            lines.append(f"{pending_label} {stmt}".rstrip())
+            pending_label = None
+        else:
+            lines.append(stmt)
+
     def flush_operate():
         nonlocal pending_operate, pending_group
         if pending_operate:
-            lines.append(" ".join(pending_operate))
+            add_line(" ".join(pending_operate))
             pending_operate = []
             pending_group = None
     
@@ -147,11 +179,7 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
         if tok.endswith((",", ":")):
             flush_operate()
             label_tok = tok if tok.endswith(",") else f"{tok[:-1]},"
-            stmt = [label_tok]
-            if idx + 1 < len(tokens) and tokens[idx + 1] != ";":
-                stmt.append(tokens[idx + 1])
-                idx += 1
-            lines.append(" ".join(stmt))
+            pending_label = label_tok
             idx += 1
             continue
         
@@ -186,7 +214,7 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             else:
                 raise FtError(f"Missing operand for {tok}", context_file, context_line)
             
-            lines.append(" ".join(stmt))
+            add_line(" ".join(stmt))
             idx += 1
             continue
         
@@ -197,7 +225,7 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             if idx + 1 < len(tokens) and tokens[idx + 1] != ";":
                 stmt.append(tokens[idx + 1])
                 idx += 1
-            lines.append(" ".join(stmt))
+            add_line(" ".join(stmt))
             idx += 1
             continue
         
@@ -228,16 +256,18 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             flush_operate()
             if idx + 1 >= len(tokens) or tokens[idx + 1] == ";":
                 raise FtError("TEXT requires an argument", context_file, context_line)
-            lines.append(f"TEXT {tokens[idx + 1]}")
+            add_line(f"TEXT {tokens[idx + 1]}")
             idx += 2
             continue
 
         # Numeric literal, quoted char, or other token stays as single line
         flush_operate()
-        lines.append(tok)
+        add_line(tok)
         idx += 1
     
     flush_operate()
+    if pending_label:
+        lines.append(pending_label)
     return lines
 
 
