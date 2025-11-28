@@ -116,21 +116,23 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
     lines: List[str] = []
     
     # PDP-8 instruction sets
-    operate_tokens = {
-        "CLA", "CLL", "CMA", "CML", "RAR", "RAL", "RTR", "RTL", "BSW", "IAC",
+    group1_tokens = {"CLA", "CLL", "CMA", "CML", "RAR", "RAL", "RTR", "RTL", "BSW", "IAC"}
+    group2_tokens = {
         "SMA", "SZA", "SNL", "SPA", "SNA", "SZL", "OSR", "HLT", "ION", "IOFF", "SNS",
-        "SKP", "CLA2", "SMA2", "SZA2", "SNL2"  # Group 2 operates
+        "SKP", "CLA2", "SMA2", "SZA2", "SNL2"
     }
     memref_ops = {"AND", "TAD", "ISZ", "DCA", "JMS", "JMP"}
     
     idx = 0
     pending_operate: List[str] = []
+    pending_group: Optional[int] = None
     
     def flush_operate():
-        nonlocal pending_operate
+        nonlocal pending_operate, pending_group
         if pending_operate:
             lines.append(" ".join(pending_operate))
             pending_operate = []
+            pending_group = None
     
     while idx < len(tokens):
         tok = tokens[idx]
@@ -200,11 +202,24 @@ def tokens_to_lines(tokens: List[str], context_file: Optional[Path] = None, cont
             continue
         
         # Operate microinstruction
-        if tok in operate_tokens:
+        if tok in group1_tokens or tok in group2_tokens:
+            grp = 1 if tok in group1_tokens else 2
+            if pending_group is None:
+                pending_group = grp
+            elif pending_group != grp:
+                flush_operate()
+                pending_group = grp
             pending_operate.append(tok)
             idx += 1
             # Flush if next token is not an operate or we're at statement end
-            if idx >= len(tokens) or tokens[idx] in {";"} or tokens[idx] not in operate_tokens:
+            next_tok = tokens[idx] if idx < len(tokens) else None
+            if (
+                next_tok is None
+                or next_tok == ";"
+                or (next_tok not in group1_tokens and next_tok not in group2_tokens)
+                or (next_tok in group1_tokens and pending_group == 2)
+                or (next_tok in group2_tokens and pending_group == 1)
+            ):
                 flush_operate()
             continue
         
@@ -284,6 +299,7 @@ def handle_page0(lines: List[str], start_idx: int, output: List[str], file_path:
         if stripped.startswith("]"):
             return idx + 1
         tokens = [map_dot_symbol(tok) for tok in normalize_tokens(tokenize(raw))]
+        tokens = [tok[:-1] + "," if tok.endswith(":") and len(tok) > 1 else tok for tok in tokens]
         if not tokens:
             idx += 1
             continue
@@ -451,7 +467,13 @@ def process_file(
                 if not peek_tokens:
                     break
                 head = peek_tokens[0]
-                if head.startswith(":") or head in {"BASE", "USE"} or head.startswith("PAGE0[") or head.endswith(","):
+                if (
+                    head.startswith(":")
+                    or head in {"BASE", "USE"}
+                    or head.startswith("PAGE0[")
+                    or head.endswith(",")
+                    or head.endswith(":")
+                ):
                     break
                 locals_tokens.extend(peek_tokens)
                 idx += 1
