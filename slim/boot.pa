@@ -1,0 +1,21 @@
+*07000
+0000
+JMS KERN
+
+TICDOT, "."
+KERN, 0
+    CLL CLA
+    TAD 7000
+    DCA .-3
+    CLA CLL
+    TAD TICDOT
+    IOT 6046
+    CLA CLL
+    TAD TICDOT
+    IOT 6046
+    CLA CLL
+    TAD TICDOT
+    IOT 6046
+    HLT
+    JMP I KERN
+
