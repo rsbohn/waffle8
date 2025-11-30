@@ -22,10 +22,11 @@ WFLG: 06001         / 000 000 000 111  [blk 1][unit 1][/RW]
     @PGE3
     DTXA
     @WFLG
-    DTLB
-    DERR            / error
-    DTSF            / skip until ready, AC=1
-    SPIN
+    DTLB            / skip next if OK
+    DERR            / error path: print and return
+WAIT:
+    DTSF            / skip next when ready
+    JMP WAIT        / not ready
 ;
 
 :PUTS
@@ -37,8 +38,6 @@ KPUTS, 3024
     @MERR
     DCA 00010
     PUTS
-    HLT
-    SPIN
 ;
 MERR, .
 TEXT "DT_ERR"

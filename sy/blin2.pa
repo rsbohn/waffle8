@@ -23,8 +23,8 @@ U1B1, 0
     TAD WFLG
     IOT 6766
     JMS DERR
-    IOT 6764
-    JMP .-1
+    WAIT, IOT 6764
+    JMP WAIT
     JMP I U1B1
 
 PUTS, 0
@@ -37,8 +37,6 @@ DERR, 0
     TAD MERR
     DCA 00010
     JMS PUTS
-    HLT
-    JMP .-1
     JMP I DERR
 MERR, .
 TEXT "DT_ERR"
