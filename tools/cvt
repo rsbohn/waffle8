@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""
+Convert Motorola S-record (PDP-8 12-bit words as low-byte/high-nibble) to
+PDP-8 absolute binary (.bin) suitable for SIMH `load`.
+
+Usage:
+  tools/cvt input.srec -o output.bin
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+
+def parse_srec(path: Path) -> Dict[int, int]:
+    memory: Dict[int, int] = {}
+    start = None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or not line.startswith("S"):
+            continue
+        rectype = line[1]
+        if rectype == "9":
+            # Start address (optional)
+            if len(line) >= 8:
+                start = int(line[4:8], 16) // 2
+            continue
+        if rectype != "1":
+            continue
+        count = int(line[2:4], 16)
+        addr = int(line[4:8], 16)
+        data_hex = line[8:-2]
+        data_bytes = [int(data_hex[i:i+2], 16) for i in range(0, len(data_hex), 2)]
+        if len(data_bytes) != count - 3:
+            raise ValueError(f"Invalid byte count in {path}: {line}")
+        for i in range(0, len(data_bytes), 2):
+            low = data_bytes[i]
+            high = data_bytes[i+1] if i + 1 < len(data_bytes) else 0
+            word = (high << 8) | low
+            memory[(addr // 2) + (i // 2)] = word & 0o7777
+    if start is not None:
+        memory["_start"] = start
+    return memory
+
+
+def to_bin(memory: Dict[int, int]) -> bytes:
+    if not memory:
+        return b""
+    # Extract start if present
+    start = memory.pop("_start", None)
+    if start is None:
+        start = min(memory)
+    # Build BIN blocks: origin, data..., origin 0000 terminator
+    words: List[int] = []
+    for addr in sorted(memory):
+        if isinstance(addr, str):
+            continue
+        words.append(0o20000 | (addr & 0o7777))  # origin marker
+        words.append(memory[addr] & 0o7777)
+    words.append(0)  # end marker
+    # Convert to bytes (big-endian 12-bit packed into 2 bytes)
+    out = bytearray()
+    for w in words:
+        out.append((w >> 6) & 0xFF)
+        out.append(w & 0x3F)
+    return bytes(out)
+
+
+def main(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(description="Convert PDP-8 S-record to SIMH BIN.")
+    parser.add_argument("input", type=Path, help="Input .srec file")
+    parser.add_argument("-o", "--output", type=Path, required=True, help="Output .bin file")
+    args = parser.parse_args(argv)
+
+    try:
+        memory = parse_srec(args.input)
+    except Exception as exc:
+        print(f"Failed to parse {args.input}: {exc}", file=sys.stderr)
+        return 1
+
+    bin_data = to_bin(memory)
+    try:
+        args.output.write_bytes(bin_data)
+    except OSError as exc:
+        print(f"Failed to write {args.output}: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -4,7 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TC08_BLOCK_WORDS 256u
+#define TC08_FRAME_WORDS 129u       /* physical frame words (last word checksum) */
+#define TC08_FRAME_DATA_WORDS 128u  /* data words per frame moved via IOT */
 #define TC08_BLOCK_MASK 0x3FFu
 #define TC08_UNIT_SHIFT 10u
 #define TC08_UNIT_MASK 0x1u
@@ -12,7 +13,7 @@
 #define TC08_UNIT_COUNT 2u
 
 static size_t tc08_block_base(uint16_t block) {
-    return (size_t)block * TC08_BLOCK_WORDS;
+    return (size_t)block * TC08_FRAME_WORDS;
 }
 
 static void tc08_unit_init(tc08_unit_t *unit,
@@ -168,21 +169,23 @@ static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
                     break;
                 }
                 size_t base = tc08_block_base(block);
-                for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
                     uint16_t src = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
                     unit->image[base + i] = pdp8_api_read_mem(cpu, src) & 0x0FFFu;
                 }
+                /* checksum word */
+                unit->image[base + TC08_FRAME_DATA_WORDS] = 0u; /* checksum placeholder */
                 if (tc08_unit_flush(unit) != 0) {
                     dev->status |= 2u;
                     break;
                 }
             } else {
-                if (!unit->image || block >= unit->image_words / TC08_BLOCK_WORDS) {
+                if (!unit->image || block >= unit->image_words / TC08_FRAME_WORDS) {
                     dev->status |= 2u; /* error */
                     break;
                 }
                 size_t base = tc08_block_base(block);
-                for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
                     uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
                     pdp8_api_write_mem(cpu, dest, unit->image[base + i]);
                 }
