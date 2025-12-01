@@ -2,9 +2,11 @@ ALL: $(FACTORY_LIB) bin/monitor bin/pdp8v tools/pdp8_bench
 
 HOST_CC ?= cc
 HOST_CFLAGS ?= -std=c11 -Wall -Wextra -pedantic
-MONITOR_OBJS = src/monitor.c \
+MONITOR_SOURCES = src/monitor.c \
         src/monitor_config.c \
-        src/monitor_platform_posix.c \
+        src/monitor_platform_posix.c
+
+MONITOR_OBJS = $(MONITOR_SOURCES) \
 	src/emulator/main.c \
         src/emulator/board.c \
         src/emulator/kl8e_console.c \
@@ -47,13 +49,24 @@ PDP8_BENCH_OBJS = tools/pdp8_bench.c \
 	src/emulator/tc08_device.c
 
 FACTORY_LIB = factory/libpdp8.so
+FACTORY_STATIC_LIB = factory/libpdp8.a
 FACTORY_SOURCES = $(wildcard src/emulator/*.c)
+FACTORY_STATIC_OBJS = $(patsubst src/emulator/%.c,factory/%.o,$(FACTORY_SOURCES))
 
 $(FACTORY_LIB): $(FACTORY_SOURCES)
 	$(HOST_CC) $(HOST_CFLAGS) -fPIC -shared $^ -o $@
 
+$(FACTORY_STATIC_LIB): $(FACTORY_STATIC_OBJS)
+	ar rcs $@ $^
+
+factory/%.o: src/emulator/%.c
+	$(HOST_CC) $(HOST_CFLAGS) -Isrc -c $< -o $@
+
 bin/monitor: $(FACTORY_LIB) $(MONITOR_OBJS) | bin
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@
+
+bin/monitor-static: $(FACTORY_STATIC_LIB) $(MONITOR_SOURCES) | bin
+	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(MONITOR_SOURCES) -Wl,-Bstatic -Lfactory -lpdp8 -Wl,-Bdynamic -o $@
 
 bin/pdp8v: $(FACTORY_LIB) $(PDP8V_OBJS) | bin
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@ -lncurses
@@ -68,7 +81,7 @@ tools/pdp8_bench: $(PDP8_BENCH_OBJS)
 	$(HOST_CC) $(HOST_CFLAGS) $(filter %.c,$^) -o $@
 
 clean:
-	-@rm bin/monitor bin/pdp8v $(FACTORY_LIB) tests/pdp8_tests tools/pdp8_bench
+	-@rm bin/monitor bin/monitor-static bin/pdp8v $(FACTORY_LIB) $(FACTORY_STATIC_LIB) $(FACTORY_STATIC_OBJS) tests/pdp8_tests tools/pdp8_bench
 	-@rmdir bin 2>/dev/null || true
 
 .SUFFIXES: .ft .pa

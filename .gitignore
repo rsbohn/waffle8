@@ -5,6 +5,7 @@
 *.gif
 *.rom
 *.swp
+lib*.a
 .envrc
 unit
 .project
