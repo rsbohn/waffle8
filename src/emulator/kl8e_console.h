@@ -40,6 +40,11 @@ int pdp8_kl8e_console_set_output_stream(pdp8_kl8e_console_t *console, FILE *stre
 int pdp8_kl8e_console_set_output_callback(pdp8_kl8e_console_t *console,
                                           pdp8_kl8e_console_output_callback callback,
                                           void *context);
+int pdp8_kl8e_console_get_keyboard_flag(const pdp8_kl8e_console_t *console);
+uint8_t pdp8_kl8e_console_get_keyboard_buffer(const pdp8_kl8e_console_t *console);
+size_t pdp8_kl8e_console_get_pending_input(const pdp8_kl8e_console_t *console,
+                                           uint8_t *buffer,
+                                           size_t buffer_size);
 
 #ifdef __cplusplus
 }

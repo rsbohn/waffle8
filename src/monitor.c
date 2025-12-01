@@ -216,6 +216,9 @@ struct monitor_runtime {
     /* Optional command-line override for the paper tape image path. */
     const char *paper_tape_image_override;
     size_t memory_words;
+    char *keyboard_buffer;
+    size_t keyboard_buffer_len;
+    size_t keyboard_buffer_pos;
 };
 
 static pdp8_kl8e_console_t *g_console = NULL;
@@ -791,6 +794,21 @@ static char *command_next_token(char **state) {
     return strtok_r(NULL, " \t", state);
 }
 
+static char *command_remaining_text(char **state) {
+    if (!state || !*state) {
+        return NULL;
+    }
+    char *cursor = *state;
+    while (*cursor && isspace((unsigned char)*cursor)) {
+        ++cursor;
+    }
+    return *cursor ? cursor : NULL;
+}
+
+static void monitor_keyboard_buffer_clear(struct monitor_runtime *runtime);
+static void monitor_keyboard_buffer_feed(struct monitor_runtime *runtime, size_t max_chars);
+static void monitor_keyboard_buffer_status(const struct monitor_runtime *runtime);
+
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_quit(struct monitor_runtime *runtime,
@@ -815,6 +833,8 @@ static enum monitor_command_status command_restore(struct monitor_runtime *runti
                                                    char **state);
 static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                                                 char **state);
+static enum monitor_command_status command_keyboard_buffer(struct monitor_runtime *runtime,
+                                                           char **state);
 static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
@@ -864,6 +884,11 @@ static const struct monitor_command monitor_commands[] = {
     {"save", command_save, "save <file>", "Write RAM image to a file.", true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
     {"read", command_read, "read <file>", "Load Motorola S-record image.", true},
+    {"kb",
+     command_keyboard_buffer,
+     "kb <text>",
+     "Queue text for KL8E keyboard input (streamed one character at a time).",
+     true},
     {"show", command_show, "show devices", "Display configured peripherals.", true},
     {"magtape",
      command_magtape,
@@ -927,6 +952,9 @@ static void monitor_runtime_init(struct monitor_runtime *runtime) {
     monitor_config_init(&runtime->config);
     runtime->config_loaded = false;
     runtime->paper_tape_image_override = NULL;
+    runtime->keyboard_buffer = NULL;
+    runtime->keyboard_buffer_len = 0u;
+    runtime->keyboard_buffer_pos = 0u;
 }
 
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
@@ -1397,6 +1425,35 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
     return MONITOR_COMMAND_OK;
 }
 
+static enum monitor_command_status command_keyboard_buffer(struct monitor_runtime *runtime,
+                                                           char **state) {
+    if (!runtime || !runtime->console) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *text = command_remaining_text(state);
+    if (!text) {
+        monitor_keyboard_buffer_status(runtime);
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_keyboard_buffer_clear(runtime);
+
+    size_t length = strlen(text);
+    runtime->keyboard_buffer = (char *)malloc(length + 1u);
+    if (!runtime->keyboard_buffer) {
+        monitor_console_puts("Unable to allocate keyboard buffer.");
+        return MONITOR_COMMAND_ERROR;
+    }
+    memcpy(runtime->keyboard_buffer, text, length + 1u);
+    runtime->keyboard_buffer_len = length;
+    runtime->keyboard_buffer_pos = 0u;
+
+    monitor_console_printf("Queued %zu byte(s) for KL8E keyboard input.\n", length);
+    monitor_keyboard_buffer_feed(runtime, 1u);
+    return MONITOR_COMMAND_OK;
+}
+
 static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state) {
     if (!runtime) {
@@ -1405,8 +1462,14 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
 
     char *topic = command_next_token(state);
     if (!topic) {
-        monitor_console_puts("show requires a subject (e.g. 'show devices').");
-        return MONITOR_COMMAND_ERROR;
+        monitor_console_puts("Available topics for 'show':");
+        monitor_console_puts("  devices   - list all attached devices");
+        monitor_console_puts("  kl8e      - KL8E console status");
+        monitor_console_puts("  console   - KL8E console status (alias)");
+        monitor_console_puts("  tc08      - TC08 DECtape controller");
+        monitor_console_puts("  magtape   - TM8E magnetic tape status");
+        monitor_console_puts("  watchdog  - watchdog timer status");
+        return MONITOR_COMMAND_OK;
     }
 
     if (strcmp(topic, "devices") == 0) {
@@ -1433,6 +1496,58 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
 
     if (strcmp(topic, "watchdog") == 0) {
         show_watchdog(runtime);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(topic, "kl8e") == 0 || strcmp(topic, "console") == 0) {
+        if (!runtime->console) {
+            monitor_console_puts("No KL8E console device is attached.");
+            return MONITOR_COMMAND_ERROR;
+        }
+        
+        monitor_console_puts("KL8E Console (Keyboard & Teleprinter)");
+        monitor_console_puts("  device codes     : 03x (keyboard), 04x (teleprinter)");
+        
+        int kbd_flag = pdp8_kl8e_console_get_keyboard_flag(runtime->console);
+        uint8_t kbd_buffer = pdp8_kl8e_console_get_keyboard_buffer(runtime->console);
+        size_t total_pending = pdp8_kl8e_console_input_pending(runtime->console);
+        
+        monitor_console_printf("  keyboard flag    : %d\n", kbd_flag);
+        if (kbd_flag) {
+            monitor_console_printf("  keyboard buffer  : 0%03o ('%c')\n",
+                                   kbd_buffer,
+                                   (kbd_buffer >= 32 && kbd_buffer < 127) ? kbd_buffer : '.');
+        } else {
+            monitor_console_puts("  keyboard buffer  : (empty)");
+        }
+        
+        size_t queue_pending = kbd_flag ? total_pending - 1u : total_pending;
+        monitor_console_printf("  input queue      : %zu character(s)\n", queue_pending);
+        
+        if (queue_pending > 0u) {
+            uint8_t preview[33];
+            size_t got = pdp8_kl8e_console_get_pending_input(runtime->console, preview, 32u);
+            monitor_console_printf("  queue preview    : \"");
+            for (size_t i = 0; i < got; ++i) {
+                uint8_t ch = preview[i];
+                if (ch == (uint8_t)'\n') {
+                    monitor_console_printf("\\n");
+                } else if (ch == (uint8_t)'\r') {
+                    monitor_console_printf("\\r");
+                } else if (ch == (uint8_t)'\t') {
+                    monitor_console_printf("\\t");
+                } else if (ch >= 32u && ch < 127u) {
+                    monitor_console_printf("%c", (int)ch);
+                } else {
+                    monitor_console_printf("\\%03o", (unsigned int)ch);
+                }
+            }
+            if (queue_pending > got) {
+                monitor_console_printf("...");
+            }
+            monitor_console_printf("\"\n");
+        }
+        
         return MONITOR_COMMAND_OK;
     }
 
@@ -1541,6 +1656,9 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
     pdp8_api_clear_halt(runtime->cpu);
     
     for (long i = 0; i < cycles_val; ++i) {
+        // Feed one character from monitor's keyboard buffer to KL8E device
+        monitor_keyboard_buffer_feed(runtime, 1u);
+        
         // Show state before execution
         uint16_t pc = pdp8_api_get_pc(runtime->cpu);
         uint16_t ac = pdp8_api_get_ac(runtime->cpu);
@@ -1575,6 +1693,85 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
     return MONITOR_COMMAND_OK;
 }
 
+static void monitor_keyboard_buffer_clear(struct monitor_runtime *runtime) {
+    if (!runtime) {
+        return;
+    }
+    if (runtime->keyboard_buffer) {
+        free(runtime->keyboard_buffer);
+        runtime->keyboard_buffer = NULL;
+    }
+    runtime->keyboard_buffer_len = 0u;
+    runtime->keyboard_buffer_pos = 0u;
+}
+
+static void monitor_keyboard_buffer_feed(struct monitor_runtime *runtime, size_t max_chars) {
+    if (!runtime || !runtime->console || !runtime->keyboard_buffer || max_chars == 0u) {
+        return;
+    }
+
+    size_t remaining = runtime->keyboard_buffer_len - runtime->keyboard_buffer_pos;
+    size_t to_send = remaining < max_chars ? remaining : max_chars;
+    for (size_t i = 0; i < to_send; ++i) {
+        char ch = runtime->keyboard_buffer[runtime->keyboard_buffer_pos++];
+        if (ch == '\n') {
+            ch = '\r';
+        }
+        (void)pdp8_kl8e_console_queue_input(runtime->console, (uint8_t)ch);
+    }
+
+    if (runtime->keyboard_buffer_pos >= runtime->keyboard_buffer_len) {
+        monitor_keyboard_buffer_clear(runtime);
+    }
+}
+
+static void monitor_keyboard_buffer_status(const struct monitor_runtime *runtime) {
+    if (!runtime || !runtime->keyboard_buffer || runtime->keyboard_buffer_len == 0u) {
+        monitor_console_puts("Keyboard buffer: (empty).");
+        return;
+    }
+
+    size_t consumed = runtime->keyboard_buffer_pos;
+    size_t remaining = runtime->keyboard_buffer_len - runtime->keyboard_buffer_pos;
+
+    char preview[96];
+    size_t written = 0;
+    size_t shown_chars = 0;
+    const size_t preview_limit = 32u;
+    while (shown_chars < remaining && written + 4 < sizeof preview && shown_chars < preview_limit) {
+        unsigned char ch = (unsigned char)runtime->keyboard_buffer[runtime->keyboard_buffer_pos + shown_chars];
+        if (ch == '\r') {
+            const char *rep = "\\r";
+            size_t rep_len = strlen(rep);
+            memcpy(&preview[written], rep, rep_len);
+            written += rep_len;
+        } else if (ch == '\n') {
+            const char *rep = "\\n";
+            size_t rep_len = strlen(rep);
+            memcpy(&preview[written], rep, rep_len);
+            written += rep_len;
+        } else if (!isprint(ch)) {
+            int n = snprintf(&preview[written], sizeof preview - written, "\\%03o", ch);
+            if (n <= 0 || (size_t)n >= sizeof preview - written) {
+                break;
+            }
+            written += (size_t)n;
+        } else {
+            preview[written++] = (char)ch;
+        }
+        ++shown_chars;
+    }
+    preview[written] = '\0';
+
+    monitor_console_printf("Keyboard buffer: %zu/%zu consumed, %zu remaining.\n",
+                           consumed,
+                           runtime->keyboard_buffer_len,
+                           remaining);
+    monitor_console_printf("Next: \"%s\"%s\n",
+                           preview,
+                           remaining > shown_chars ? "..." : "");
+}
+
 static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
     if (!runtime) {
         return;
@@ -1603,6 +1800,7 @@ static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
         pdp8_kl8e_console_destroy(runtime->console);
         runtime->console = NULL;
     }
+    monitor_keyboard_buffer_clear(runtime);
     if (runtime->cpu) {
         pdp8_api_destroy(runtime->cpu);
         runtime->cpu = NULL;
@@ -1610,14 +1808,16 @@ static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
     runtime->memory_words = 0u;
 }
 
-static void service_platform_keyboard(pdp8_kl8e_console_t *console) {
-    if (!console) {
+static void service_platform_keyboard(struct monitor_runtime *runtime) {
+    if (!runtime || !runtime->console) {
         return;
     }
 
+    monitor_keyboard_buffer_feed(runtime, 1u);
+
     uint8_t ch = 0;
     while (monitor_platform_poll_keyboard(&ch)) {
-        (void)pdp8_kl8e_console_queue_input(console, ch);
+        (void)pdp8_kl8e_console_queue_input(runtime->console, ch);
     }
 }
 
@@ -1628,6 +1828,8 @@ static bool go_pump_keyboard(struct monitor_runtime *runtime, bool *user_break) 
     if (!runtime || !runtime->console) {
         return false;
     }
+
+    monitor_keyboard_buffer_feed(runtime, 1u);
 
     bool saw_input = false;
     bool break_requested = user_break ? *user_break : false;
@@ -1710,7 +1912,7 @@ static int go_run_until_event(struct monitor_runtime *runtime,
         monitor_platform_idle();
     }
 
-    service_platform_keyboard(runtime->console);
+    service_platform_keyboard(runtime);
 
     if (stop_reason) {
         *stop_reason = reason;
@@ -1727,7 +1929,7 @@ static int run_with_console(struct monitor_runtime *runtime, size_t cycles) {
     int total_executed = 0;
 
     while (remaining > 0u) {
-        service_platform_keyboard(runtime->console);
+        service_platform_keyboard(runtime);
 
         size_t request = remaining > MONITOR_RUN_SLICE ? MONITOR_RUN_SLICE : remaining;
         int executed = pdp8_api_run(runtime->cpu, request);
@@ -1748,7 +1950,7 @@ static int run_with_console(struct monitor_runtime *runtime, size_t cycles) {
         monitor_platform_idle();
     }
 
-    service_platform_keyboard(runtime->console);
+    service_platform_keyboard(runtime);
     return total_executed;
 }
 

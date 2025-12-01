@@ -1,0 +1,90 @@
+*00200
+
+JMS TREAD
+HLT
+
+TREAD, 0
+    CLA CLL
+    TAD ZPBASE
+    DCA TPTR
+    CLA
+    DCA TCOUNT
+    DCA TSTATE
+    TREAD_LOOP, JMS GETCHR
+    SNA
+    JMP TREAD_DONE
+    TAD M40
+    SNA
+    JMP TREAD_DELIM
+    JMP TREAD_LOOP
+    TREAD_DELIM, CLA
+    DCA TSTATE
+    JMP TREAD_LOOP
+    TREAD_DONE,
+    JMP I TREAD
+M40, 07740
+TPTR, 0
+TCOUNT, 0
+TSTATE, 0
+
+ZPBASE, 00160
+
+/ read a single character from the keyboard (TTY)
+/ Input: none
+/ Output: AC contains character read
+/ Preserves: none (clobbers AC)
+GETCHR, 0
+    GETCHR_WAIT, IOT 06031
+    JMP GETCHR_WAIT
+    IOT 06036
+    JMP I GETCHR
+
+
+
+/ is this a valid octal digit?
+/ Input: AC contains character
+/ Output: AC=0 if valid octal digit (0-7), AC≠0 if not
+/ Preserves: none (clobbers AC)
+ISOCT, 0
+TAD NEG_060
+SMA
+JMP ISOCT_CHK8
+CLA CMA
+JMP I ISOCT
+ISOCT_CHK8,
+TAD NEG_010
+SPA
+JMP ISOCT_VALID
+CLA CMA
+JMP I ISOCT
+ISOCT_VALID,
+CLA
+JMP I ISOCT
+
+NEG_060, 7720
+NEG_010, 7770
+
+/ is this A-Za-z?
+/ Input: AC contains character
+/ Output: AC=0 if alphabetic (A-Z or a-z), AC≠0 if not
+/ Preserves: none (clobbers AC)
+ISALPHA, 0
+AND K0337
+TAD NEG_101
+SMA
+JMP ISALPHA_CHKZ
+CLA CMA
+JMP I ISALPHA
+ISALPHA_CHKZ,
+TAD NEG_032
+SPA
+JMP ISALPHA_VALID
+CLA CMA
+JMP I ISALPHA
+ISALPHA_VALID,
+CLA
+JMP I ISALPHA
+
+K0337, 0337
+NEG_101, 7677
+NEG_032, 7746

@@ -268,6 +268,29 @@ int pdp8_kl8e_console_flush(pdp8_kl8e_console_t *console) {
     return fflush(console->output_stream);
 }
 
+int pdp8_kl8e_console_get_keyboard_flag(const pdp8_kl8e_console_t *console) {
+    return console ? (console->keyboard_flag ? 1 : 0) : 0;
+}
+
+uint8_t pdp8_kl8e_console_get_keyboard_buffer(const pdp8_kl8e_console_t *console) {
+    return console ? console->keyboard_buffer : 0u;
+}
+
+size_t pdp8_kl8e_console_get_pending_input(const pdp8_kl8e_console_t *console,
+                                           uint8_t *buffer,
+                                           size_t buffer_size) {
+    if (!console || !buffer || buffer_size == 0u) {
+        return 0u;
+    }
+    size_t to_copy = console->pending_input.size < buffer_size
+                         ? console->pending_input.size
+                         : buffer_size;
+    if (to_copy > 0u && console->pending_input.data) {
+        memcpy(buffer, console->pending_input.data, to_copy);
+    }
+    return to_copy;
+}
+
 int pdp8_kl8e_console_set_output_stream(pdp8_kl8e_console_t *console, FILE *stream) {
     if (!console) {
         return -1;

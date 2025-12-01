@@ -62,6 +62,14 @@ Execute exactly
 (default 1), printing PC/AC/LINK after each step.  Example:
 .BR "t 5" .
 .TP
+.B kb \fItext\fP
+Queue
+.I text
+for the KL8E keyboard and stream it into the emulator one character at a time
+(newline is translated to carriage return).  Invoking
+.B kb
+with no arguments prints buffer status (consumed/remaining and a preview).
+.TP
 .B run \fIaddr\fP \fIcycles\fP
 Set PC to
 .I addr

@@ -35,8 +35,8 @@ TPTR,    0
 TCOUNT,  0
 TSTATE,  0
 
-KSF:    06031   / IOT 6031 skip if character available
-KRB:    06036   / IOT 6036 clear flag, read character into AC
+:KSF [ IOT 06031 ]  / IOT 6031 skip if character available
+:KRB [ IOT 06036 ]  / IOT 6036 clear flag, read character into AC
 ZPBASE: 00160
 
 / read a single character from the keyboard (TTY)
@@ -45,9 +45,9 @@ ZPBASE: 00160
 / Preserves: none (clobbers AC)
 :GETCHR
 GETCHR_WAIT,
-        IOT KSF             / Skip if keyboard ready
+        KSF             / Skip if keyboard ready
         JMP GETCHR_WAIT     / Wait if not ready
-        IOT KRB             / Read character into AC
+        KRB             / Read character into AC
 ;
 
 
