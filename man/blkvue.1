@@ -1,0 +1,91 @@
+.\" blkvue(1) manual page
+.TH BLKVUE 1 "November 2025" "waffle8" "User Commands"
+.
+.SH NAME
+blkvue \- print TC08 block contents from the PDP-8 monitor
+.
+.SH SYNOPSIS
+Load the assembled binary (S\-record or tape) into core, then start execution at
+.B 0064
+.RI ( *0064
+in source). Set block/unit before running.
+.
+.SH DESCRIPTION
+.B blkvue
+is a PDP\-8 utility that reads one 256\-word block from the TC08 DECtape controller
+and prints it as sixteen lines of octal words via the teleprinter (IOT 6041/6046).
+Each line shows a 16\-word chunk with the line offset (0000, 0020, 0040, …, 0360).
+.
+.SS Configuration words
+All configuration lives on page zero:
+.TP
+.B 0020 BLKNO
+Block number to dump (octal).
+.TP
+.B 0021 UNITFL
+Unit selector: leave zero for TC08 unit 0; set
+.B 02000
+to select unit 1 (read/write).
+.TP
+.B 0027 BUFAD
+Buffer where the block is transferred (default
+.B 02000
+). The transfer uses TC08 DTXA/DTLB to DMA into this page.
+.
+.SS Flow
+.IP "1." 3
+DTCA resets the controller; DTXA loads the transfer address from
+.BR BUFAD .
+.IP "2."
+DTLB starts the block transfer with the AC containing
+.BR BLKNO " and " UNITFL .
+If TC08 does not skip (error), blkvue prints "TC08 ERR" and halts.
+.IP "3."
+The buffer is printed: offset, colon, then 32 words per line, eight lines total.
+.
+.SS Teleprinter output
+Characters are emitted with TSF/TLS (6041/6046). Ensure the simulator/host config
+has a console device enabled so output is visible.
+.
+.SH ENVIRONMENT
+.TP
+.B TC08_IMAGE0
+Path to the read\-only unit0 tape image (controller default).
+.TP
+.B TC08_IMAGE1
+Path to the read/write unit1 tape image (used when
+.B UNITFL
+sets unit 1).
+.
+.SH EXAMPLES
+.TP
+Dump block 1 of unit0 (default):
+.EX
+*0020/ 00001         / set BLKNO
+*0060                / start blkvue
+.EE
+.TP
+Dump block 5 of unit1:
+.EX
+*0020/ 00005         / BLKNO
+*0021/ 02000         / UNITFL selects unit 1
+*0060                / start
+.EE
+.TP
+Assemble and write an S\-record for loading:
+.EX
+tools/8asm pdp8/blkvue.pa blkvue.srec
+.EE
+.
+.SH FILES
+.TP
+.B pdp8/blkvue.pa
+Source code.
+.
+.SH SEE ALSO
+.BR 8asm (1),
+.BR tc08 (1),
+.BR pdp8 (1)
+.
+.SH AUTHOR
+waffle8 contributors

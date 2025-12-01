@@ -91,19 +91,22 @@ def print_os8_directory(image_path, dir_block=1):
         # Parse OS/8 directory segment header
         print("Header: " + ' '.join(f"{w:04o}" for w in words[:7]))
         dirent_num = 0
-        entry_len = 6  # 6 words per entry: 0-2 filename, 3 ext, 4-5 attrs
+        # OS/8 directory entries are 6 words: 3 name words, 1 word for extension, 2 words for attrs (start, length/flags)
+        entry_len = 6
         for i in range(7, BLOCK_SIZE_WORDS - entry_len + 1, entry_len):
             entry = words[i:i+entry_len]
-            # OS/8 leaves unused directory slots zeroed in the first name word; stop once we hit the first empty slot
-            if entry[0] == 0:
+            # OS/8 leaves unused directory slots zeroed; stop once we hit the first empty slot
+            if entry[0] == 0 and entry[1] == 0 and entry[2] == 0:
                 break
             filename = sixbit_pair(entry[0]) + sixbit_pair(entry[1]) + sixbit_pair(entry[2])
             filename = filename.rstrip()
             ext = sixbit_pair(entry[3]).rstrip()
+            name_only = filename[:6].rstrip()
+            # entry[4] = start block, entry[5] = length/flags
             attrs = ' '.join(f"{w:04o}" for w in entry[4:6])
-            if filename.strip() == '' and ext.strip() == '':
+            if name_only.strip() == '' and ext.strip() == '':
                 continue
-            print(f"{dirent_num:2d}: {filename:<6} {ext:<2} ATTRS: {attrs}")
+            print(f"{dirent_num:2d}: {name_only:<6} {ext:<2} ATTRS: {attrs}")
             dirent_num += 1
 
 def main():

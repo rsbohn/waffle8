@@ -2,93 +2,264 @@
 
 This document describes the Watchdog Timer device implemented in the PDP‑8 emulator.
 
-Overview
-- The watchdog is a wall-clock countdown timer that guest code can control via IOT.
-- When the countdown reaches zero the device performs one of the configured actions (RESET or HALT), and may be one-shot or periodic.
+## Overview
+The watchdog is a wall-clock countdown timer that guest code can control via IOT instructions. When the countdown reaches zero, the device performs one of the configured actions (RESET, HALT, INTERRUPT, or TICK), and may be one-shot or periodic.
 
-Control register (12 bits)
-- Bits 11..9: CMD (3 bits)
-  - 000 = disabled
-  - 001 = RESET (one-shot)
-  - 010 = RESET (periodic)
-  - 011 = HALT (one-shot)
-  - 100 = HALT (periodic)
-- Bits 8..0: COUNT (9 bits) — countdown value in deciseconds (0..511). 0 means disabled / no countdown.
+## Control Register (12 bits)
+- **Bits 11..9: CMD** (3 bits)
+  - `000` = disabled
+  - `001` = RESET (one-shot)
+  - `010` = RESET (periodic)
+  - `011` = HALT (one-shot)
+  - `100` = HALT (periodic)
+  - `101` = INTERRUPT (one-shot)
+  - `110` = INTERRUPT (periodic)
+  - `111` = TICK (periodic, flag-only)
+- **Bits 8..0: COUNT** (9 bits) — countdown value in deciseconds (0..511)
 
-IOT interface
-- IOT microbits mapping implemented by the device:
-  - 01 (WRITE): write AC into the control register. Writing starts/stops the countdown depending on CMD/COUNT.
-  - 02 (READ):  read the control register into AC.
-  - 04 (RESTART): reload the active counter from the COUNT field and resume ticking.
+## Device Code
+The watchdog timer uses **device code 055** (octal). IOT instructions are formed as `06000 | (055 << 3) | function`:
+- Base: `6550` (octal)
 
-Config stanza (pdp8.config)
-Add a `device watchdog` block to `pdp8.config` to expose and configure the watchdog at monitor startup. Example:
+## IOT Instructions
 
-device watchdog {
-  iot = 055x           # documented device code (optional, informational)
-  enabled = true
-  mode = "halt"       # string: "halt" or "reset" (informational)
-  periodic = false
-  default_count = 5    # default countdown in deciseconds
-  pause_on_halt = true # if true, the monitor will not advance the watchdog while the CPU is halted
-}
+| Octal | Mnemonic | Function | Description |
+|-------|----------|----------|-------------|
+| 6550  | NOP      | 0        | No operation |
+| 6551  | ISK      | 1        | Interrupt Skip if expired flag set |
+| 6552  | WRITE    | 2        | Write control register from AC |
+| 6553  | READ     | 3        | Read control register into AC |
+| 6554  | RESTART  | 4        | Restart counter with current COUNT value |
 
-Notes on semantics
-- Timing uses the host's monotonic clock. COUNT is interpreted as deciseconds and converted to nanoseconds internally.
-- The emulator core provides a tick-callback API devices can register. The watchdog registers a tick handler invoked on each CPU step and checks for expiry there.
-- `pause_on_halt` is parsed and available; the current implementation avoids advancing the counter while the CPU is halted in common usage, but precise paused-time accounting can be improved if needed.
-- Interrupt-mode is not implemented; choosing interrupt in the `mode`/CMD currently falls back to RESET. Implementing true device interrupts requires wiring into the core interrupt priority system.
+### Usage Examples
 
-Developer notes
-- When adding this device the build targets were updated so monitor and shared library builds include `watchdog.c`.
-- POSIX feature test macros are used in a few files to ensure `clock_gettime()` and `mkdtemp()` are declared.
-
-Testing
-- `factory/test_watchdog.py` contains ctypes-based tests that exercise write/read, one-shot HALT, and one-shot RESET behavior against `factory/libpdp8.so`.
-- `tests/test_config.c` verifies parsing of the `pdp8.config` watchdog stanza and includes tests for invalid configurations (missing stanza and out-of-range values).
--
-Factory runner wiring
-- The Python `factory/driver.py` runner can create and attach the watchdog when a `device watchdog { ... }` stanza is present in `pdp8.config`.
-- The driver initializes the watchdog control register by issuing an `IOT` from Python: it sets AC, writes an IOT instruction into address 0 and executes a single step. This avoids adding a new C helper API.
-- The driver checks for the presence of `pdp8_watchdog_create` in the shared library and falls back gracefully if the device isn't available in an older build.
-
-Assembler notes and symbolic IOTs
-- The project's assembler supports labels and resolves symbols to addresses. It also accepts `IOT <octal>` syntax.
-- Important note: defining a symbol as a data word and then using `IOT SYMBOL` will assemble an IOT whose operand is the symbol's address (not the numeric octal constant). Example:
-  - `WD_WRITE, 06551` followed by `IOT WD_WRITE` results in an IOT coded with the address of `WD_WRITE`, not `06551`.
-- Recommended approaches:
-  - Use `IOT 06551` (explicit octal literal) when you mean the IOT opcode 06551.
-  - If you want a readable symbolic name that does not allocate memory, we can add an `EQU` directive to the assembler so symbols can represent numeric constants without occupying a word. (Not yet implemented.)
-
-Demos and examples
-- `demo/hello-wd.asm` shows a minimal program that writes the watchdog control register and waits for HALT.
-- `demo/dull-boy.asm` demonstrates refreshing the watchdog from a long-running guest program. Lessons learned:
-  - Initialize the watchdog control register before entering long loops so `RESTART` IOTs refresh an armed timer.
-  - Refresh the watchdog frequently enough during long operations (for example, after each printed character) to avoid unintended expiry when delays exceed the watchdog period.
-  - Use `IOT <octal>` forms to clearly express IOT ops with octal constants; the assembler marks these as IOT entries.
-
-Next actions (optional)
-- Implement true interrupt delivery for the watchdog instead of mapping to RESET.
-- Harden config parsing and return clear errors on invalid keys/values.
-- Add an integration test that starts the monitor binary, attaches the watchdog, and verifies runtime behavior end-to-end.
-
-
-
-## Disabling the watchdog from the monitor
-
-You can disable the watchdog interactively from the monitor by entering a short sequence of CPU instructions that clears the AC and writes a zero control word into the watchdog's IOT control register. At the monitor prompt deposit and run:
-
-```
-7300        / CLA
-6551        / IOT 6551
-7402        / HLT
+**Set watchdog to HALT after 10 seconds (one-shot):**
+```assembly
+CLA CLL
+TAD K_HALT_10SEC    / Load control word
+IOT 6552            / Write to watchdog
+...
+K_HALT_10SEC, 03144 / CMD=3 (HALT one-shot), COUNT=100 (10 seconds)
 ```
 
-Explanation:
-- `CLA` clears the AC (accumulator) so the control register's COUNT/CMD field will be zero.
-- `IOT 6551` issues the watchdog WRITE IOT with the numeric opcode shown; the device will see AC==0 and thus be disabled (CMD=000).
-- `HLT` halts the CPU so the change takes effect immediately and prevents the CPU from proceeding into any code that might re-enable the watchdog.
+**Periodic watchdog reset every 5 seconds:**
+```assembly
+CLA CLL
+TAD K_RESET_5SEC    / Load control word
+IOT 6552            / Write to watchdog
+...
+K_RESET_5SEC, 01062 / CMD=1 (RESET one-shot), COUNT=50 (5 seconds)
+```
 
-Notes:
-- Depending on assembler or monitor syntax you may need to supply the IOT opcode as an explicit octal literal (for example `IOT 06551`). The monitor accepts `IOT <octal>` forms as shown elsewhere in the docs.
-- Use this technique with care: disabling the watchdog removes a safety net for runaway guest programs. Prefer iterating on guest code or configuration changes when possible.
+**Disable watchdog:**
+```assembly
+CLA             / AC = 0
+IOT 6552        / Write zero to control register
+```
+
+**Restart/refresh watchdog timer:**
+```assembly
+IOT 6554        / Restart counter (useful in periodic loops)
+```
+
+## Implementation Details
+
+### Timing Model
+- Uses the host's monotonic clock (`clock_gettime(CLOCK_MONOTONIC)`)
+- COUNT is interpreted as deciseconds (0.1 second units) and converted to nanoseconds internally
+- Maximum timeout: 511 deciseconds (~51.1 seconds)
+- The watchdog tick handler is invoked on each CPU cycle to check for expiry
+
+### Command Behaviors
+
+**RESET modes (CMD=1,2):**
+- Sets PC to 0000 (reset vector)
+- One-shot mode disables after firing; periodic mode reloads
+
+**HALT modes (CMD=3,4):**
+- Calls `pdp8_api_set_halt()` to stop CPU execution
+- One-shot mode disables after firing; periodic mode reloads
+
+**INTERRUPT modes (CMD=5,6):**
+- Calls `pdp8_api_request_interrupt()` with device code 055
+- Requires ION (interrupt enable) and ISR at 0010 to handle
+- ISR should use ISK (6551) to poll watchdog and clear flag
+
+**TICK mode (CMD=7):**
+- Periodic flag-only mode for timing/polling
+- Sets expired flag but takes no automatic action
+- Use ISK (6551) to check if timer expired
+- Flag latches until explicitly cleared by WRITE or RESTART
+
+### Zero COUNT Handling
+- COUNT=0 causes immediate expiry on next tick
+- Useful for triggering immediate actions
+- Still respects one-shot vs periodic behavior
+
+## Configuration (pdp8.config)
+
+The watchdog is enabled by default in the monitor and pdp8v virtual machine. No configuration file is required for basic operation. Programs control the watchdog via IOT instructions at runtime.
+
+## Programming Examples
+
+### Example 1: Simple Timeout Protection
+```assembly
+/ Set 10-second watchdog, get character, halt
+*00100
+
+START,
+    CLA CLL
+    TAD WDOG_CMD        / Load watchdog control word
+    IOT 6552            / Set watchdog timer
+    JMS GETCHR          / Get keyboard character (blocks)
+    HLT                 / Halt with character in AC
+
+WDOG_CMD, 03144         / HALT one-shot, 100 deciseconds (10 sec)
+
+GETCHR, 0
+GETCHR_WAIT,
+    IOT 6031            / KSF: Skip if keyboard ready
+    JMP GETCHR_WAIT
+    IOT 6036            / KRB: Read character
+    JMP I GETCHR
+```
+
+### Example 2: Periodic Watchdog Refresh
+```assembly
+/ Long-running loop that refreshes watchdog
+START,
+    CLA CLL
+    TAD WDOG_CMD        / RESET periodic, 5 seconds
+    IOT 6552            / Arm watchdog
+
+LOOP,
+    / ... do work ...
+    IOT 6554            / RESTART: refresh watchdog timer
+    JMP LOOP
+
+WDOG_CMD, 01062         / RESET periodic, 50 deciseconds (5 sec)
+```
+
+### Example 3: Interrupt-Driven Watchdog
+```assembly
+/ Use watchdog to generate periodic interrupts
+*0000
+    JMP START
+
+*0010                   / Interrupt service routine
+ISR,
+    DCA SAVE_AC         / Save AC
+    IOT 6551            / ISK: Skip if watchdog expired
+    JMP ISR_EXIT
+    / Handle watchdog event
+    IOT 6552            / Clear watchdog by rewriting control
+ISR_EXIT,
+    TAD SAVE_AC         / Restore AC
+    ION                 / Re-enable interrupts
+    JMP I 0006          / Return from interrupt
+
+*0200
+START,
+    ION                 / Enable interrupts
+    TAD WDOG_CMD
+    IOT 6552            / Start watchdog in interrupt mode
+    / ... main program ...
+    HLT
+
+WDOG_CMD, 06144         / INTERRUPT periodic, 100ds (10 sec)
+SAVE_AC, 0
+```
+
+## Demo Programs
+
+- **`slim/helper.pa`** - Minimal watchdog + keyboard input example
+- **`demo/hello-wd.asm`** - Simple watchdog HALT demonstration
+- **`demo/dull-boy.asm`** - Periodic watchdog refresh in a long-running program
+- **`demo/wd-ticker.asm`** - Watchdog ticker mode for timing loops
+
+## Best Practices
+
+1. **Always set the watchdog before blocking operations** (keyboard input, device waits)
+2. **Use appropriate timeouts** for your operation (10 seconds is typical for interactive input)
+3. **Refresh periodic watchdogs frequently** in long-running loops
+4. **Use explicit octal literals** for IOT instructions: `IOT 6552` not `IOT SYMBOL`
+5. **Test watchdog behavior** in pdp8v where you can see the countdown timer
+6. **Consider one-shot vs periodic** based on whether you need continuous protection
+
+
+
+## Monitor Commands
+
+### Disabling the Watchdog Interactively
+
+From the monitor prompt, you can disable the watchdog by depositing and running a small sequence:
+
+```
+pdp8> dep 200 7300 6552 7402
+pdp8> go 200
+```
+
+This deposits:
+- `7300` - CLA (clear AC)
+- `6552` - IOT 6552 (WRITE with AC=0, disabling watchdog)
+- `7402` - HLT
+
+### Checking Watchdog Status
+
+Use the `show devices` command to see watchdog status in the monitor.
+
+## API Reference (C)
+
+```c
+#include "watchdog.h"
+
+// Create and attach watchdog
+pdp8_watchdog_t *wd = pdp8_watchdog_create();
+pdp8_watchdog_attach(cpu, wd);
+
+// Query status
+struct pdp8_watchdog_status status;
+pdp8_watchdog_get_status(wd, &status);
+
+// Status fields:
+// - enabled: non-zero if counting
+// - expired: non-zero if last expiry fired
+// - cmd: raw command value (0..7)
+// - configured_count: countdown in deciseconds (0..511)
+// - remaining_ds: remaining time in deciseconds, -1 if not running
+
+// Cleanup
+pdp8_watchdog_destroy(wd);
+```
+
+## Testing
+
+The watchdog implementation is tested in:
+- `tests/test_emulator.c` - Core watchdog functionality tests
+- `slim/helper.pa` - Integration test with keyboard input
+
+## Troubleshooting
+
+**Problem:** Watchdog fires immediately
+- **Cause:** COUNT set to 0
+- **Solution:** Use non-zero COUNT value (100 deciseconds = 10 seconds is typical)
+
+**Problem:** Watchdog doesn't fire
+- **Cause:** CMD is 0 (disabled) or WRITE IOT wasn't executed
+- **Solution:** Verify AC contains correct control word before IOT 6552
+
+**Problem:** Can't break infinite loop in monitor
+- **Cause:** Not using `go` command which pumps keyboard
+- **Solution:** Use `go` instead of `c` or `t` for programs that wait for input
+
+**Problem:** Program halts unexpectedly
+- **Cause:** Watchdog timeout expired
+- **Solution:** Increase COUNT value or refresh watchdog more frequently with IOT 6554
+
+## Developer Notes
+
+- Source files: `src/emulator/watchdog.c`, `src/emulator/watchdog.h`
+- Device code: 055 (octal) - IOT base 6550
+- Uses POSIX monotonic clock for accurate timing
+- Registered as tick callback in CPU core
+- Fully integrated with monitor and pdp8v virtual machine

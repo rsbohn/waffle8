@@ -1,0 +1,101 @@
+BASE 00200
+
+TREAD
+HLT
+
+:TREAD
+	/ TREAD: Read up to 8 tokens (octal or single letter), 
+    /   space-delimited
+    /   store at ZPBASE:ZPBASE+7
+	@ZPBASE        / Point to start of storage
+	!TPTR          / TPTR = ZPBASE
+	CLA
+	!TCOUNT        / TCOUNT = 0
+	!TSTATE        / TSTATE = 0 (0: idle, 1: in number, 2: in letter)
+
+TREAD_LOOP,
+	GETCHR          / Get next char in AC (returns 0 if no char)
+	SNA             / If AC=0, end of input (simulate for now)
+	JMP TREAD_DONE
+	TAD M40         / Subtract ' ' (space)
+	SNA             / If space, token delimiter
+	JMP TREAD_DELIM
+	/ ... (token parsing logic would go here) ...
+	JMP TREAD_LOOP
+
+TREAD_DELIM,
+	CLA
+	!TSTATE        / End current token
+	JMP TREAD_LOOP
+
+TREAD_DONE,
+;
+M40,    07740
+TPTR,    0
+TCOUNT,  0
+TSTATE,  0
+
+KSF:    06031   / IOT 6031 skip if character available
+KRB:    06036   / IOT 6036 clear flag, read character into AC
+ZPBASE: 00160
+
+/ read a single character from the keyboard (TTY)
+/ Input: none
+/ Output: AC contains character read
+/ Preserves: none (clobbers AC)
+:GETCHR
+GETCHR_WAIT,
+        IOT KSF             / Skip if keyboard ready
+        JMP GETCHR_WAIT     / Wait if not ready
+        IOT KRB             / Read character into AC
+;
+
+
+
+/ is this a valid octal digit?
+/ Input: AC contains character
+/ Output: AC=0 if valid octal digit (0-7), AC≠0 if not
+/ Preserves: none (clobbers AC)
+ISOCT,  0
+        TAD NEG_060     / Subtract '0' (ASCII 060)
+        SMA             / Skip if negative (< '0')
+        JMP ISOCT_CHK8
+        CLA CMA         / Not a digit, return non-zero
+        JMP I ISOCT
+ISOCT_CHK8,
+        TAD NEG_010     / Subtract 8 more (check if >= '8'/070)
+        SPA             / Skip if positive or zero (>= '8')
+        JMP ISOCT_VALID
+        CLA  CMA        / >= '8', not octal, -1
+        JMP I ISOCT
+ISOCT_VALID,
+        CLA             / Valid octal digit, return 0
+        JMP I ISOCT
+
+NEG_060,    7720        / -'0' in octal (two's complement)
+NEG_010,    7770        / -8 in octal (two's complement)
+
+/ is this A-Za-z?
+/ Input: AC contains character
+/ Output: AC=0 if alphabetic (A-Z or a-z), AC≠0 if not
+/ Preserves: none (clobbers AC)
+ISALPHA,    0
+        AND K0337       / Force to uppercase (clear bit 5)
+        TAD NEG_101     / Subtract 'A' (ASCII 0101)
+        SMA             / Skip if negative (< 'A')
+        JMP ISALPHA_CHKZ
+        CLA CMA         / < 'A', not alpha
+        JMP I ISALPHA
+ISALPHA_CHKZ,
+        TAD NEG_032     / Subtract 26 more (check if > 'Z'/0132)
+        SPA             / Skip if positive or zero (> 'Z')
+        JMP ISALPHA_VALID
+        CLA CMA         / > 'Z', not alpha
+        JMP I ISALPHA
+ISALPHA_VALID,
+        CLA             / Valid alphabetic character, return 0
+        JMP I ISALPHA
+
+K0337,      0337        / Mask to force uppercase (clears bit 5)
+NEG_101,    7677        / -'A' in octal (two's complement)
+NEG_032,    7746        / -26 in octal (two's complement)

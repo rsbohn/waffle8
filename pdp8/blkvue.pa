@@ -1,0 +1,187 @@
+/ BLKVUE - view a TC08 block
+/ Reads a block from TC08 into BUFAD (02000) and prints sixteen lines.
+/ Each line shows the offset and 16 words (256 words per block).
+/ Set BLKNO to the block number (octal). Set UNITFL to 02000 to use unit 1,
+/ or leave zero for unit 0. Uses teleprinter IOTs 6041/6046 for output.
+
+        *00020
+BLKNO,  00000           / Block number to dump (octal)
+UNITFL, 00000           / 02000 selects unit 1; 00000 for unit 0
+PTR,    00000           / Pointer into buffer
+OFFS,   00000           / Current offset (0,40,100,...,340)
+WCNT,   00000           / Word counter per line
+LCNT,   00000           / Line counter (8 lines)
+SPTR,   00000           / String pointer for PUTS
+BUFAD,  02000           / Buffer where the block is loaded
+WRESET, 07760           / -16 words per line
+LRESET, 07760           / -16 lines per block
+STEPOF, 00020           / Offset increment per line (16 words)
+COLON,  ":"             / ASCII ':'
+SPACE,  00040           / ASCII space
+CR,     00015
+LF,     00013
+TZERO,  "0"
+MASK,   00007
+W,      00000
+DOPTR,  DOTOCT         / Indirect pointer for DOTOCT (keeps call in page 0)
+PUTSPTR,PUTS
+DOTCLP, DOTCOLON
+DOTSPP, DOTSP
+DOTELP, DOTEOL
+ERRMSG, .
+"T"
+"C"
+"0"
+"8"
+" "
+"E"
+"R"
+"R"
+CR
+LF
+00000
+
+        *00064
+/ TC08 IOT convenience macros
+DTCA=   6762            / Device clear/reset (device 076, func 2)
+DTXA=   6771            / Load transfer address (device 077, func 1)
+DTSF=   6764            / Skip if ready (device 076, func 4)
+DTLB=   6766            / Load block number/start transfer (device 076, func 6)
+DTGO=   6767            / GO (reserved; not used here)
+
+/ Teleprinter IOT convenience macros
+TTYTSF= 6041            / TSF - skip when ready
+TYTTLS= 6046            / TLS - output character
+
+START,  CLA CLL
+        JMS READBLK
+        JMS PRINTBLK
+HALT,   HLT
+        JMP HALT
+
+READBLK,0               / Load the block from TC08 into BUFAD
+        IOT DTCA
+        CLA CLL
+        TAD BUFAD
+        DTXA
+        CLA CLL
+        TAD BLKNO
+        TAD UNITFL
+        DTLB
+        JMP RDERR       / No skip => error
+        JMP I READBLK
+
+RDERR,  CLA CLL         / Print an error and halt
+        TAD ERRMSG
+        DCA SPTR
+        JMS I PUTSPTR
+        HLT
+        JMP I RDERR
+
+PRINTBLK,0              / Dump 8 lines of 32 words
+        CLA CLL
+        TAD BUFAD
+        DCA PTR
+        CLA CLL
+        DCA OFFS
+        CLA CLL
+        TAD LRESET
+        DCA LCNT
+
+PRLINE, CLA CLL
+        TAD OFFS
+        JMS I DOPTR
+        JMS I DOTCLP
+        JMS I DOTSPP
+        CLA CLL
+        TAD WRESET
+        DCA WCNT
+
+PRWORD, CLA CLL
+        TAD I PTR
+        JMS I DOPTR
+        JMS I DOTSPP
+        ISZ PTR
+        ISZ WCNT
+        JMP PRWORD
+
+        JMS I DOTELP
+        CLA CLL
+        TAD OFFS
+        TAD STEPOF
+        DCA OFFS
+        ISZ LCNT
+        JMP PRLINE
+        JMP I PRINTBLK
+
+/ Subroutines moved to page 1 for space
+        *00200
+DOTCOLON,0
+        CLA CLL
+        TAD COLON
+        JMS PUTC
+        JMP I DOTCOLON
+
+DOTSP,  0
+        CLA CLL
+        TAD SPACE
+        JMS PUTC
+        JMP I DOTSP
+
+DOTEOL, 0
+        CLA CLL
+        TAD CR
+        JMS PUTC
+        CLA CLL
+        TAD LF
+        JMS PUTC
+        JMP I DOTEOL
+
+PUTC,   0               / Output the low byte of AC to TTY
+        IOT TTYTSF      / TSF - skip when ready
+        JMP PUTC
+        IOT TYTTLS      / TLS - output char
+        JMP I PUTC
+
+PUTS,   0               / Print zero-terminated string at SPTR
+        CLA CLL
+        TAD I SPTR
+        SZA
+        JMP .+2
+        JMP I PUTS
+        JMS PUTC
+        ISZ SPTR
+        JMP PUTS+1
+
+DOTOCT, 0               / Print AC as 4-digit octal
+        DCA W
+        CLA CLL
+        TAD W
+        BSW CLL
+        RAR
+        RAR
+        RAR
+        AND MASK
+        TAD TZERO
+        JMS PUTC
+        CLA CLL
+        TAD W
+        BSW
+        AND MASK
+        TAD TZERO
+        JMS PUTC
+        CLA CLL
+        TAD W
+        CLL
+        RAR
+        RAR
+        RAR
+        AND MASK
+        TAD TZERO
+        JMS PUTC
+        CLA CLL
+        TAD W
+        AND MASK
+        TAD TZERO
+        JMS PUTC
+        JMP I DOTOCT

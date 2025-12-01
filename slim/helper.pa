@@ -1,0 +1,26 @@
+/ helper.pa
+/ Helper routine to enable watchdog and call GETCHR
+/ Location: 00100
+/ Sets watchdog to HALT after 10 seconds, then calls GETCHR
+
+*00100
+
+HELPER,
+    CLA CLL
+    TAD WDOG_HALT_10SEC     / Watchdog command: HALT after 10 seconds
+    IOT 6552                / Set watchdog timer (WRITE command)
+    JMS GETCHR              / Call GETCHR
+    HLT
+
+WDOG_HALT_10SEC, 03144      / Watchdog: HALT (one-shot) after 10 seconds (cmd=3, count=100ds)
+
+/ read a single character from the keyboard (TTY)
+/ Input: none
+/ Output: AC contains character read
+/ Preserves: none (clobbers AC)
+GETCHR, 0
+    IOT 6031                / KSF: Skip if keyboard ready
+    JMP .-1                 / Wait if not ready
+    IOT 6036                / KRB: Read character into AC
+    JMP I GETCHR            / Return
+

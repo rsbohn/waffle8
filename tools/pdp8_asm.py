@@ -148,6 +148,10 @@ class PDP8Assembler:
             if pseudo_match:
                 name, value = pseudo_match.group(1).upper(), int(pseudo_match.group(2), 8)
                 PSEUDO_OPS[name] = value
+                # Also expose the value via the symbol table so operands like IOT NAME work.
+                if name in self.symbols:
+                    raise AsmError(f"Duplicate label '{name}'", line_no)
+                self.symbols[name] = value
                 continue
 
             if stripped.startswith("*"):
