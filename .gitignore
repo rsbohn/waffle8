@@ -18,5 +18,6 @@ extracted_*/*
 magtape/*
 media/*
 tu56/*
+tapes/ptp.out
 tests/pdp8_tests
 trace-args
