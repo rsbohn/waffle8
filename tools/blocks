@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Interactive TC08 block viewer.
+
+This utility reads PDP-8 TC08 DECtape images that store 256 12-bit words per
+block. A BLOCK.BL file contains 0o40 blocks; the tool prints one block at a time
+in 16x16 octal format.
+
+It understands two input forms:
+* a raw ``BLOCK.BL`` image (16,384 bytes)
+* an OS/8 ``BLOCKS.BL`` file living inside a ``.tu56`` DECtape image
+"""
+
+import os
+import struct
+import sys
+from typing import Dict, List, Optional, Tuple
+
+BLOCK_WORDS = 256
+BLOCK_COUNT = 0o40  # 32 blocks per BLOCK.BL file
+BYTES_PER_WORD = 2
+ROW_WORDS = 16
+BLOCK_BYTES = BLOCK_WORDS * BYTES_PER_WORD
+EXPECTED_SIZE = BLOCK_COUNT * BLOCK_BYTES
+OS8_PHYSICAL_WORDS = 129
+OS8_PHYSICAL_BYTES = OS8_PHYSICAL_WORDS * BYTES_PER_WORD
+
+
+class BlockFile:
+    """Handle reading 12-bit words from a BLOCK.BL file."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._size = self._stat_size(path)
+        self._validate_size()
+
+    @staticmethod
+    def _stat_size(path: str) -> int:
+        try:
+            return os.path.getsize(path)
+        except OSError as exc:
+            raise FileNotFoundError(f"Cannot open '{path}': {exc.strerror}.") from exc
+
+    def _validate_size(self) -> None:
+        if self._size % BLOCK_BYTES != 0:
+            raise ValueError(
+                f"{self.path} has an unexpected length ({self._size} bytes). "
+                f"Each block must be {BLOCK_BYTES} bytes."
+            )
+        if self._size < EXPECTED_SIZE:
+            raise ValueError(
+                f"{self.path} is too small: {self._size} bytes. "
+                f"Expected at least {EXPECTED_SIZE} bytes for {BLOCK_COUNT:o} blocks."
+            )
+
+    def read_block(self, block_index: int) -> List[int]:
+        if block_index < 0 or block_index >= BLOCK_COUNT:
+            raise IndexError(
+                f"Block {block_index:o} is out of range. Valid blocks are 00-37."
+            )
+        offset = block_index * BLOCK_BYTES
+        if offset + BLOCK_BYTES > self._size:
+            raise ValueError(
+                f"Block {block_index:o} starts at byte {offset}, "
+                f"but the file is only {self._size} bytes."
+            )
+        with open(self.path, "rb") as handle:
+            handle.seek(offset)
+            data = handle.read(BLOCK_BYTES)
+        if len(data) != BLOCK_BYTES:
+            raise ValueError(
+                f"Block {block_index:o} could not be read: expected {BLOCK_BYTES} bytes, "
+                f"got {len(data)}."
+            )
+        return [struct.unpack_from("<H", data, i)[0] & 0o7777 for i in range(0, BLOCK_BYTES, 2)]
+
+
+def _signed12(word: int) -> int:
+    return word if word < 0o4000 else word - 0o10000
+
+
+def _unpack_words(data: bytes) -> List[int]:
+    return [struct.unpack_from("<H", data, i)[0] & 0o7777 for i in range(0, len(data), 2)]
+
+
+def _sixbit_char(val: int) -> str:
+    c = val & 0x3F
+    if c == 0:
+        return " "
+    if 1 <= c <= 26:
+        return chr(ord("A") + c - 1)
+    if 27 <= c <= 36:
+        return chr(ord("0") + c - 27)
+    if c == 46:
+        return "."
+    return "_"
+
+
+def _sixbit_pair(word: int) -> str:
+    return _sixbit_char((word >> 6) & 0x3F) + _sixbit_char(word & 0x3F)
+
+
+def _normalize_target(name: str) -> Tuple[str, str]:
+    text = name.strip().upper()
+    if "." in text:
+        base, ext = text.split(".", 1)
+    else:
+        base, ext = text, ""
+    return base, ext
+
+
+def _read_physical_block(path: str, block: int) -> List[int]:
+    offset = block * OS8_PHYSICAL_BYTES
+    with open(path, "rb") as handle:
+        handle.seek(offset)
+        data = handle.read(OS8_PHYSICAL_BYTES)
+    if len(data) != OS8_PHYSICAL_BYTES:
+        raise ValueError(
+            f"Physical block {block} is incomplete: expected {OS8_PHYSICAL_BYTES} bytes, got {len(data)}."
+        )
+    return _unpack_words(data)
+
+
+def _read_os8_logical_block(path: str, block: int, total_physical: int) -> List[int]:
+    phys0 = 2 * block
+    phys1 = phys0 + 1
+    if phys1 >= total_physical:
+        raise ValueError(
+            f"Logical block {block:o} needs physical frames {phys0},{phys1}, "
+            f"but the tape only has {total_physical} frames."
+        )
+    frame0 = _read_physical_block(path, phys0)
+    frame1 = _read_physical_block(path, phys1)
+    data_words = frame0[:-1] + frame1[:-1]
+    if len(data_words) != BLOCK_WORDS:
+        raise ValueError(
+            f"Logical block {block:o} combined length {len(data_words)} != {BLOCK_WORDS}."
+        )
+    return data_words
+
+
+def _parse_directory_segment(words: List[int]) -> Tuple[Dict[str, int], List[Dict[str, object]]]:
+    if len(words) < 11:
+        raise ValueError("Directory segment too small.")
+    leader = words[:5]
+    count = abs(_signed12(leader[0]))
+    origin, link = leader[1], leader[2]
+    header = {
+        "count": count,
+        "origin": origin,
+        "link": link,
+    }
+
+    entries: List[Dict[str, object]] = []
+    idx = 5
+    current_block = origin
+    entry_idx = 0
+    while entry_idx < count and idx + 5 < len(words):
+        name1, name2, name3, name4, _, length_word = words[idx:idx + 6]
+        length_signed = _signed12(length_word)
+        length_blocks = abs(length_signed)
+        filename = (
+            _sixbit_pair(name1)
+            + _sixbit_pair(name2)
+            + _sixbit_pair(name3)
+        ).rstrip()
+        ext = _sixbit_pair(name4).rstrip()
+        if name1 == 0:
+            status = "free"
+        elif length_word == 0:
+            status = "tentative"
+        else:
+            status = "file"
+        entries.append(
+            {
+                "index": entry_idx,
+                "start_block": current_block,
+                "length_blocks": length_blocks,
+                "status": status,
+                "name": filename,
+                "ext": ext,
+            }
+        )
+        current_block += length_blocks
+        entry_idx += 1
+        idx += 6
+        if name1 == 0 and length_word == 0:
+            break
+    return header, entries
+
+
+def _directory_entries(path: str) -> List[Dict[str, object]]:
+    size = os.path.getsize(path)
+    if size % OS8_PHYSICAL_BYTES != 0:
+        raise ValueError(
+            f"{path} length {size} is not an even number of physical DECtape frames ({OS8_PHYSICAL_BYTES} bytes each)."
+        )
+    total_physical = size // OS8_PHYSICAL_BYTES
+    block = 1
+    seen = set()
+    entries: List[Dict[str, object]] = []
+    while block and block not in seen:
+        seen.add(block)
+        words = _read_os8_logical_block(path, block, total_physical)
+        header, seg_entries = _parse_directory_segment(words)
+        entries.extend(seg_entries)
+        block = header["link"]
+    if block in seen:
+        raise ValueError(f"Directory loop detected at block {block:o}.")
+    return entries
+
+
+class Os8BlockFile:
+    """Handle reading BLOCKS.BL stored inside a .tu56 OS/8 DECtape image."""
+
+    def __init__(self, path: str, member: Optional[str]):
+        self.path = path
+        self._entries = _directory_entries(path)
+        self._size = os.path.getsize(path)
+        self._total_physical = self._size // OS8_PHYSICAL_BYTES
+        target_name, target_ext = _normalize_target(member or "BLOCKS.BL")
+        self._entry = self._find_entry(target_name, target_ext)
+        if self._entry["length_blocks"] < BLOCK_COUNT:
+            raise ValueError(
+                f"{self.path}:{self._entry['name']}.{self._entry['ext']} is only "
+                f"{self._entry['length_blocks']:o} blocks; expected {BLOCK_COUNT:o}."
+            )
+
+    def _find_entry(self, name: str, ext: str) -> Dict[str, object]:
+        matches = [
+            e for e in self._entries
+            if e["status"] == "file" and e["name"] == name and e["ext"] == ext
+        ]
+        if not matches:
+            raise FileNotFoundError(
+                f"No OS/8 file named {name}.{ext or '<noext>'} found in {self.path}."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple entries for {name}.{ext or '<noext>'} found; directory is ambiguous."
+            )
+        return matches[0]
+
+    def read_block(self, block_index: int) -> List[int]:
+        if block_index < 0 or block_index >= BLOCK_COUNT:
+            raise IndexError(
+                f"Block {block_index:o} is out of range. Valid blocks are 00-37."
+            )
+        logical = self._entry["start_block"] + block_index
+        return _read_os8_logical_block(self.path, logical, self._total_physical)
+
+
+def print_block(words: List[int]) -> None:
+    for row in range(ROW_WORDS):
+        start = row * ROW_WORDS
+        chunk = words[start:start + ROW_WORDS]
+        line = " ".join(f"{word:04o}" for word in chunk)
+        print(f"{start:04o}: {line}")
+
+
+def parse_block_number(raw: str) -> int:
+    cleaned = raw.rstrip(".").strip()
+    if not cleaned:
+        raise ValueError("Missing block number. Provide an octal block between 00 and 37.")
+    try:
+        return int(cleaned, 8)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid block '{raw}'. Use octal without a prefix, for example 00 or 20."
+        ) from exc
+
+
+def repl() -> int:
+    print("Welcome!")
+    tape: Optional[object] = None
+
+    while True:
+        try:
+            line = input("> ").strip()
+        except EOFError:
+            print()
+            return 0
+
+        if not line:
+            continue
+
+        upper = line.upper()
+        if upper == "BYE":
+            return 0
+        if upper.startswith("OPEN"):
+            parts = line.split()
+            if len(parts) == 1:
+                print("OPEN requires a file path, e.g. OPEN FORTH.BL or OPEN TAPE.TU56 BLOCKS.BL")
+                continue
+            path = parts[1].strip()
+            member: Optional[str] = None
+            if len(parts) >= 3:
+                member = " ".join(parts[2:]).strip()
+            if ":" in path and not member:
+                base, member = path.split(":", 1)
+                path = base
+            try:
+                if path.lower().endswith(".tu56"):
+                    tape = Os8BlockFile(path, member)
+                    desc = f"{tape._entry['name']}.{tape._entry['ext']} from {path}"
+                else:
+                    tape = BlockFile(path)
+                    desc = path
+                print(f"Opened {desc}")
+            except (FileNotFoundError, ValueError) as exc:
+                tape = None
+                print(exc)
+            continue
+
+        if not tape:
+            print("No tape open. Use OPEN <file> before requesting a block.")
+            continue
+
+        try:
+            block_num = parse_block_number(line)
+            words = tape.read_block(block_num)
+            print_block(words)
+        except (ValueError, IndexError) as exc:
+            print(exc)
+
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) > 1:
+        print("BLOCKS is interactive. Start it without arguments.")
+        return 1
+    return repl()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
