@@ -1,0 +1,177 @@
+/ DUMP8.PA
+/ Dump a range of core as octal words, eight per line, using PUTC.
+/ You can adapt the inner loop to pull words from a DECtape buffer instead.
+
+/ Assume:
+*0200           / origin (adjust as you like)
+
+        / Configuration: start & end of the region to dump
+START,  0000    / first word address to dump
+END,    0177    / last word address to dump (inclusive)
+
+        / Zero page / working storage
+        *0000
+PTR,    0       / current word address
+WCOUNT, 0       / words printed on current line (0..7)
+WORD,   0       / scratch for current word
+DIGCNT, 0       / digit counter in OCT4
+TMP,    0       / scratch
+
+        *0200   / back to code
+
+MAIN,   CLA CLL
+        TAD     START      / PTR := START
+        DCA     PTR
+
+        CLA
+        DCA     WCOUNT     / 0 words on line
+
+NEXTWORD,
+        / stop when PTR > END
+        TAD     PTR
+        CMA IAC                 / AC := -PTR
+        TAD     END
+        SMA SZA             / if END - PTR < 0, we're past the end
+        JMP     DONE
+
+        / Load WORD := M[PTR]
+        CLA
+        TAD I   PTR
+        DCA     WORD
+
+        / Print the word in 4-digit octal
+        JMS     OCT4
+
+        / Print a space between words on the line
+        CLA
+        TAD     SPACE
+        JMS     PUTC
+
+        / Increment WCOUNT, wrap at 8
+        TAD     WCOUNT
+        TAD     ONE
+        DCA     WCOUNT
+        TAD     WCOUNT
+        TAD     MINUS8      / AC = WCOUNT - 8
+        SNA CLA             / zero? then we just hit 8 words
+        JMP     CONT_LINE
+
+        / End of line: CR LF, reset WCOUNT
+        CLA
+        TAD     CR
+        JMS     PUTC
+        CLA
+        TAD     LF
+        JMS     PUTC
+
+        CLA
+        DCA     WCOUNT
+
+CONT_LINE,
+        / PTR := PTR + 1
+        TAD     PTR
+        TAD     ONE
+        DCA     PTR
+        JMP     NEXTWORD
+
+DONE,   HLT
+        JMP     MAIN       / restart if continued
+
+/ ------- Subroutines -------
+
+/ PUTC: output character in AC (low 8 bits), preserve link.
+/ Your previous example used:
+/
+/   PUTC, 0
+/          IOT 6041
+/   JMP .-1
+/          IOT 6046
+/          JMP I PUTC
+/
+/ I’ll reuse that.
+
+PUTC,   0
+        IOT     6041        / wait ready (high-speed punch / TTY out)
+        JMP     .-1
+        IOT     6046        / output AC low 8 bits
+        JMP I   PUTC
+
+/ OCT4: print WORD as four octal digits (0000–7777), most-significant first.
+/   Uses WORD, DIGCNT, TMP, calls PUTC.
+/   On entry: WORD holds the 12-bit value to print.
+
+OCT4,   0
+        CLA CLL
+        TAD     FOUR
+        DCA     DIGCNT      / 4 digits to produce
+
+OCT4_LOOP,
+        CLA CLL
+        TAD     WORD
+        / Extract top 3 bits: we’ll rotate left to bring them into low bits.
+        / 12-bit word: bits 11..9, 8..6, 5..3, 2..0 for each digit.
+        / Do: rotate left until these 3 bits reach positions 2..0.
+
+        / We’ll rotate left until DIGCNT tells us how many groups left.
+        / For simplicity: pipeline of rotates using TMP as scratch.
+
+        / Compute shifts: for digit #n (from 4 downto 1), we need:
+        /   shifts = DIGCNT-1 groups * 3 bits = (DIGCNT-1)*3 rotates.
+        DCA     TMP          / TMP := WORD (we’ll rotate TMP)
+        CLA
+        TAD     DIGCNT
+        TAD     MINUS1       / DIGCNT-1
+        DCA     SHIFTCT
+
+ROTATE_LOOP,
+        CLA
+        TAD     SHIFTCT
+        SNA             / 0? done rotating
+        JMP     ROT_DONE
+
+        CLA CLL
+        TAD     TMP
+        RAL                 / rotate left 1 bit through link
+        DCA     TMP
+        CLA
+        TAD     SHIFTCT
+        TAD     MINUS1
+        DCA     SHIFTCT
+        JMP     ROTATE_LOOP
+
+ROT_DONE,
+        / Now low 3 bits of TMP hold this digit
+        CLA
+        TAD     TMP
+        AND     SEVEN       / isolate 3 bits
+        TAD     ZEROCH      / '0' + digit
+        JMS     PUTC
+
+        / Decrement digit count
+        CLA
+        TAD     DIGCNT
+        TAD     MINUS1
+        DCA     DIGCNT
+        SNA CLA             / if DIGCNT != 0, do next digit
+        JMP     OCT4_LOOP
+
+        JMP I   OCT4
+
+/ ------- Constants -------
+
+SPACE,  040      / ' '
+CR,     015      / carriage return
+LF,     012      / line feed
+ZEROCH, 060      / ASCII '0'
+SEVEN,  0007
+ONE,    0001
+FOUR,   0004
+MINUS1, 7777     / -1 in 12 bits
+MINUS8, 7770     / -8 in 12 bits
+
+SHIFTCT,0        / temp counter for OCT4
+
+        / End of program
+        $
+
+

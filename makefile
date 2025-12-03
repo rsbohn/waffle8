@@ -65,7 +65,7 @@ factory/%.o: src/emulator/%.c
 bin/monitor: $(FACTORY_LIB) $(MONITOR_OBJS) | bin
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@
 
-bin/monitor-static: $(FACTORY_STATIC_LIB) $(MONITOR_SOURCES) | bin
+bin/monitor.static: $(FACTORY_STATIC_LIB) $(MONITOR_SOURCES) | bin
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(MONITOR_SOURCES) -Wl,-Bstatic -Lfactory -lpdp8 -Wl,-Bdynamic -o $@
 
 bin/pdp8v: $(FACTORY_LIB) $(PDP8V_OBJS) | bin

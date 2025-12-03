@@ -2,6 +2,12 @@
 """
 Lightweight PDP-8 assembler for a constrained PAL-like syntax.
 
+Usage:
+  pdp8_asm.py <source.pa> [<dest.srec>] [--list]
+
+If no output file is specified, S-records are written to stdout.
+Use --list to generate an assembly listing to stderr.
+
 Supported features:
   * Origins via `*<octal>`
   * Labels in the form `LABEL,`
@@ -575,83 +581,74 @@ def assemble(path: Path, output: Path) -> None:
 
 def main(argv: Sequence[str]) -> int:
 
-    parser = argparse.ArgumentParser(description="Assemble PDP-8 PAL-style source to S-records.")
+    parser = argparse.ArgumentParser(
+        description="Assemble PDP-8 PAL-style source to S-records.",
+        epilog="If no output file is specified, S-records are written to stdout."
+    )
     parser.add_argument("source", type=Path, help="Input assembly file")
-    parser.add_argument("output", type=Path, nargs="?", help="Output S-record file")
-    parser.add_argument("-o", "--output", dest="output_path", type=Path, help="Explicit S-record output path")
-    parser.add_argument("--list", action="store_true", help="Emit a human-readable listing to STDOUT")
-    parser.add_argument("--list-only", action="store_true", help="Generate listing without writing S-records")
+    parser.add_argument("output", type=Path, nargs="?", help="Output S-record file (optional; stdout if omitted)")
+    parser.add_argument("--list", action="store_true", help="Emit a human-readable listing to stderr")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print pseudo-opcode table and extra info")
     args = parser.parse_args(argv)
+
     if args.verbose:
-        print("Pseudo-opcode table:")
+        print("Pseudo-opcode table:", file=sys.stderr)
         if not PSEUDO_OPS:
-            print("  (empty)")
+            print("  (empty)", file=sys.stderr)
         else:
             for k, v in PSEUDO_OPS.items():
-                print(f"  {k} = {v:04o}")
+                print(f"  {k} = {v:04o}", file=sys.stderr)
 
-    if args.list_only and not args.list:
-        parser.error("--list-only requires --list")
+    # Read and assemble the source
+    try:
+        lines = args.source.read_text().splitlines()
+    except OSError as exc:
+        print(f"Unable to read {args.source}: {exc}", file=sys.stderr)
+        return 1
 
-    # The positional 'output' and '--output' are mutually exclusive in practice.
-    # No need to check for both being set.
-
-    output_path: Optional[Path] = args.output_path or args.output
-
-    if args.list:
-        try:
-            lines = args.source.read_text().splitlines()
-        except OSError as exc:
-            print(f"Unable to read {args.source}: {exc}", file=sys.stderr)
-            return 1
-
-        assembler = PDP8Assembler(lines)
-        listing_rows: List[Tuple[Statement, Optional[int], Optional[AsmError]]] = []
-        errors: List[AsmError] = []
-        try:
-            assembler.first_pass()
-        except AsmError as exc:
-            errors.append(exc)
-
-        memory: Dict[int, int] = {}
-        if not errors:
-            memory, listing_rows, pass_errors = assembler.assemble_listing()
-            errors.extend(pass_errors)
-
-        listing_text = render_listing(args.source, assembler, listing_rows, errors)
-        print(listing_text)
-
-        if errors:
-            return 1
-
-        if args.list_only:
-            return 0
-
-        if output_path is None:
-            if args.source.suffix:
-                output_path = args.source.with_suffix(".srec")
-            else:
-                output_path = Path(str(args.source) + ".srec")
-
-        try:
-            _write_srec(assembler, memory, output_path)
-        except AsmError as exc:
-            print(exc, file=sys.stderr)
-            return 1
-        except OSError as exc:
-            print(f"Unable to write {output_path}: {exc}", file=sys.stderr)
-            return 1
-        return 0
-
-    if output_path is None:
-        parser.error("Output path required unless --list is specified")
+    assembler = PDP8Assembler(lines)
+    listing_rows: List[Tuple[Statement, Optional[int], Optional[AsmError]]] = []
+    errors: List[AsmError] = []
 
     try:
-        assemble(args.source, output_path)
+        assembler.first_pass()
     except AsmError as exc:
-        print(exc, file=sys.stderr)
+        errors.append(exc)
+
+    memory: Dict[int, int] = {}
+    if not errors:
+        memory, listing_rows, pass_errors = assembler.assemble_listing()
+        errors.extend(pass_errors)
+
+    # Generate listing to stderr if requested
+    if args.list:
+        listing_text = render_listing(args.source, assembler, listing_rows, errors)
+        print(listing_text, file=sys.stderr)
+
+    if errors:
         return 1
+
+    # Generate S-records
+    if not memory:
+        print("No output generated; empty program?", file=sys.stderr)
+        return 1
+
+    start_addr = assembler.symbols.get("START", min(memory))
+    records = words_to_srec(memory, start_addr)
+
+    # Write to stdout or file
+    if args.output is None:
+        # Output to stdout
+        for record in records:
+            print(record)
+    else:
+        # Output to file
+        try:
+            args.output.write_text("\n".join(records) + "\n")
+        except OSError as exc:
+            print(f"Unable to write {args.output}: {exc}", file=sys.stderr)
+            return 1
+
     return 0
 
 
