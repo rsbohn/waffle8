@@ -130,25 +130,31 @@ W,      0        / temp counter for OCT4
 / Uses TMP at 0024 as status flag
 / ===============================================
         *0400
+SPOT,	CLL CLA
+	TAD 0027
+	JMS DTREAD
+	ISZ 0027
+	HLT
+	JMP SPOT
+	HLT
+
 DTREAD, 0               / return address
         DCA     DTFRAME / save frame number
-        
         CLA CLL
         IOT     6762    / DTCA: clear/reset TC08
         
-DTWAIT1, IOT    6764    / DTSF: skip when ready
-        JMP     DTWAIT1
+	IOT    6764    / DTSF: skip when ready
+        JMP .-1
         
         CLA CLL
         TAD     DTBUF   / AC := 01000 (buffer address)
         IOT     6771    / DTXA: load transfer address
         
         CLA CLL
-        TAD     DTFRAME / AC := frame number
-        IOT     6766    / DTLB: load block & start read
-        
-DTWAIT2, IOT    6764    / DTSF: skip when transfer done
-        JMP     DTWAIT2
+        TAD    DTFRAME / AC := frame number
+        IOT    6766    / DTLB: load block & start read
+	IOT    6764    / DTSF: skip when transfer done
+        JMP .-1
         
         / Set flag to indicate success
         CLA CLL
