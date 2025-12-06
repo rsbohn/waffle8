@@ -16,6 +16,7 @@ CORE_SOURCES := ../src/emulator/main.c \
         ../src/emulator/paper_tape_device.c \
         ../src/emulator/paper_tape_punch.c \
         ../src/emulator/magtape_device.c \
+        ../src/emulator/tc08_device.c \
         ../src/emulator/watchdog.c \
         ../src/emulator/interrupt_control.c
 

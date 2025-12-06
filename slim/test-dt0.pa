@@ -1,0 +1,98 @@
+/ test-dt0.pa
+/ Read OS/8 logical block 7 from DT0: and print the first 10 words.
+/ Assumes TC08 minimal model (DTLB triggers immediate DMA).
+
+        / Zero page workspace
+        *0020
+PTR,    0               / pointer into staging buffer
+COUNT,  0               / loop counter (-10 .. 0)
+W,      0               / scratch for OCT4
+CHBUF,  0               / temp for PUTCH
+
+        *0200
+START,  CLA CLL
+        IOT     6762            / DCR: reset TC08
+WAIT_R, IOT     6764            / DTSF: skip when ready
+        JMP     WAIT_R
+
+        CLA
+        TAD     BUFFER_ADDR
+        IOT     6771            / DTXA: transfer addr := 01000
+
+        CLA
+        TAD     BLOCKNUM
+        IOT     6766            / DTLB: read block into buffer
+
+WAIT_X, IOT     6764            / wait for transfer to finish
+        JMP     WAIT_X
+
+        CLA
+        TAD     BUFFER_ADDR
+        DCA     PTR
+        CLA
+        TAD     MINUS10
+        DCA     COUNT
+
+PRLOOP, CLA
+        TAD I   PTR
+        JMS     OCT4            / print word
+        CLA
+        TAD     CR
+        JMS     PUTCH
+        CLA
+        TAD     LF
+        JMS     PUTCH
+        ISZ     PTR
+        ISZ     COUNT
+        JMP     PRLOOP
+        HLT
+
+/ --- Subroutines ---
+
+/ PUTCH - Block until KL8E ready, then transmit character in AC
+PUTCH,  0
+        DCA     CHBUF           / save char, clear AC
+PUTCH_WAIT,
+        IOT     6041            / TSF: skip when ready
+        JMP     PUTCH_WAIT
+        TAD     CHBUF
+        IOT     6046            / TLS: send to teleprinter
+        CLA
+        JMP I   PUTCH
+
+/ OCT4: print WORD in AC as four octal digits.
+OCT4,   0
+        DCA     W
+        TAD     W
+        BSW
+        RAR; RAR; RAR
+        AND     SEVEN
+        TAD     ZEROCH
+        JMS     PUTCH
+        TAD     W
+        BSW
+        AND     SEVEN
+        TAD     ZEROCH
+        JMS     PUTCH
+        TAD     W
+        RAR; RAR; RAR
+        AND     SEVEN
+        TAD     ZEROCH
+        JMS     PUTCH
+        TAD     W
+        AND     SEVEN
+        TAD     ZEROCH
+        JMS     PUTCH
+        JMP I   OCT4
+
+/ --- Constants ---
+
+BUFFER_ADDR, 01000             / staging buffer
+BLOCKNUM,   00007              / logical block 7 on DT0:
+MINUS10,    7766               / -10
+CR,         015
+LF,         012
+ZEROCH,     060
+SEVEN,      0007
+
+        $

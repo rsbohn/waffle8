@@ -26,6 +26,8 @@ def sixbit_char(val):
         return chr(ord('A') + c - 1)
     elif 27 <= c <= 36:
         return chr(ord('0') + c - 27)
+    elif 0o60 <= c <= 0o71:
+        return chr(ord('0') + c - 0o60)
     elif c == 46:
         return '.'
     else:

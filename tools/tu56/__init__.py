@@ -35,6 +35,9 @@ def sixbit_char(val: int) -> str:
         return chr(ord("A") + c - 1)
     if 27 <= c <= 36:
         return chr(ord("0") + c - 27)
+    # Some tapes store digits using ASCII codes (0o60-0o71); treat them as 0-9.
+    if 0o60 <= c <= 0o71:
+        return chr(ord("0") + c - 0o60)
     if c == 46:
         return "."
     return "_"

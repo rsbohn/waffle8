@@ -1,0 +1,84 @@
+/ binloader.pa
+/ BIN loader for TC08 DECtape (.BI from PAL8)
+/ ------------------------------------------------------------
+/ - Resident at 0100–0177.
+/ - Reads one OS/8 logical block (256 words) from the TC08.
+/ - Block number comes from SR (device fixed to DT0:).
+/ - The block is staged at 01000, then parsed as:
+/       [count|04000] [origin] data[count] [checksum]
+/   The high bit in COUNT is ignored; data words are copied to ORIGIN..ORIGIN+COUNT-1.
+/ - After the copy, execution jumps to ORIGIN (start of payload).
+
+        *0000
+BLOCK,      0               / TC08 logical block number (from SR)
+COUNT,      0               / remaining words to copy
+ORIGIN,     0               / destination base
+SRC,        0               / pointer into staging buffer
+DST,        0               / destination pointer
+
+        *0100
+START,  CLA CLL
+        OSR
+        AND     BLOCK_MASK
+        DCA     BLOCK
+
+        CLA CLL
+        IOT     6762            / DCR: reset TC08
+WAIT_R, IOT     6764            / DTSF: skip when ready
+        JMP     WAIT_R
+
+        CLA CLL
+        TAD     BUFFER_ADDR
+        IOT     6771            / DTXA: transfer addr := 01000
+
+        CLA CLL
+        TAD     BLOCK
+        IOT     6766            / DTLB: read block into buffer
+
+WAIT_X, IOT     6764            / wait for transfer to finish
+        JMP     WAIT_X
+
+        / Parse staged block header
+        CLA
+        TAD     BUFFER_ADDR
+        DCA     SRC             / SRC -> first word of buffer
+
+        CLA
+        TAD     I SRC           / ORIGIN
+        DCA     ORIGIN
+		TAD		I SRC
+        DCA     DST             / DST := ORIGIN
+        ISZ     SRC             / SRC -> first data word
+
+        CLA
+        TAD     I SRC           / COUNT (may have 4000 flag)
+        AND     COUNT_MASK
+        DCA     COUNT
+        ISZ     SRC             / SRC -> first payload word
+
+COPY,   CLA
+        TAD     COUNT
+        SZA                 / done when COUNT == 0
+        JMP     DO_COPY
+        JMP     FINISH
+
+DO_COPY,
+        CLA
+        TAD     I SRC
+        DCA I   DST
+        ISZ     SRC
+        ISZ     DST
+        CLA
+        TAD     COUNT
+        TAD     MINUS1
+        DCA     COUNT
+        JMP     COPY
+
+FINISH, JMP     ORIGIN         / hand control to loaded image
+
+BUFFER_ADDR, 01000             / staging buffer (safe above payload)
+BLOCK_MASK,  01777             / keep block bits only, force unit 0
+COUNT_MASK,  00777             / strip high control bit from count
+MINUS1,      7777
+
+        $

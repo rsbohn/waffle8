@@ -8,7 +8,7 @@ PTR,    0       / current word address
 WCOUNT, 0       / words printed on current line (0..7)
 WORD,   0       / scratch for current word
 DIGCNT, 0       / digit counter in OCT4
-TMP,    0       / scratch
+TMP,    0       / scratch / also used as DT flag at 0024
 WA,     0       / start address
 WB,     0177    / end address
         *0200   / back to code
@@ -121,6 +121,44 @@ MINUS1, 7777     / -1 in 12 bits
 MINUS8, 7770     / -8 in 12 bits
 
 W,      0        / temp counter for OCT4
+
+/ ===============================================
+/ DECtape read routine at 0400
+/ Reads one frame (128 words) from DECtape
+/ Frame number in AC on entry (e.g., 0001 for frame 1)
+/ Data stored at DTBUF (01000)
+/ Uses TMP at 0024 as status flag
+/ ===============================================
+        *0400
+DTREAD, 0               / return address
+        DCA     DTFRAME / save frame number
+        
+        CLA CLL
+        IOT     6762    / DTCA: clear/reset TC08
+        
+DTWAIT1, IOT    6764    / DTSF: skip when ready
+        JMP     DTWAIT1
+        
+        CLA CLL
+        TAD     DTBUF   / AC := 01000 (buffer address)
+        IOT     6771    / DTXA: load transfer address
+        
+        CLA CLL
+        TAD     DTFRAME / AC := frame number
+        IOT     6766    / DTLB: load block & start read
+        
+DTWAIT2, IOT    6764    / DTSF: skip when transfer done
+        JMP     DTWAIT2
+        
+        / Set flag to indicate success
+        CLA CLL
+        IAC             / AC := 1
+        DCA     TMP     / TMP := 1 (flag set)
+        
+        JMP I   DTREAD
+
+DTFRAME, 0              / stores requested frame number
+DTBUF,   01000          / 128-word buffer at page 010
 
         / End of program
         $

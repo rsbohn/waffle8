@@ -25,6 +25,7 @@ static void tc08_unit_init(tc08_unit_t *unit,
     unit->image = NULL;
     unit->image_words = 0;
     unit->writable = writable;
+    unit->os8_logical_layout = true; /* assume OS/8 logical blocks unless we detect frames */
     unit->path[0] = '\0';
 
     if (path && *path) {
@@ -54,6 +55,11 @@ static void tc08_unit_init(tc08_unit_t *unit,
                         break;
                     }
                     unit->image[i] = ((uint16_t)buf[1] << 8 | (uint16_t)buf[0]) & 0x0FFFu;
+                }
+                if (unit->image_words % TC08_BLOCK_WORDS == 0u) {
+                    unit->os8_logical_layout = true;
+                } else if (unit->image_words % 129u == 0u) {
+                    unit->os8_logical_layout = false;
                 }
             }
         }
@@ -163,6 +169,10 @@ static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
                     dev->status |= 2u;
                     break;
                 }
+                if (!unit->os8_logical_layout) {
+                    dev->status |= 2u; /* writing physical-frame images not supported */
+                    break;
+                }
                 if (tc08_unit_ensure_capacity(unit, block) != 0) {
                     dev->status |= 2u;
                     break;
@@ -177,14 +187,39 @@ static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
                     break;
                 }
             } else {
-                if (!unit->image || block >= unit->image_words / TC08_BLOCK_WORDS) {
-                    dev->status |= 2u; /* error */
+                if (!unit->image) {
+                    dev->status |= 2u;
                     break;
                 }
-                size_t base = tc08_block_base(block);
-                for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
-                    uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
-                    pdp8_api_write_mem(cpu, dest, unit->image[base + i]);
+                if (unit->os8_logical_layout) {
+                    size_t logical_blocks = unit->image_words / TC08_BLOCK_WORDS;
+                    if (block >= logical_blocks) {
+                        dev->status |= 2u;
+                        break;
+                    }
+                    size_t base = tc08_block_base(block);
+                    for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
+                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
+                        pdp8_api_write_mem(cpu, dest, unit->image[base + i]);
+                    }
+                } else {
+                    size_t phys_blocks = unit->image_words / 129u;
+                    size_t phys0 = (size_t)block * 2u;
+                    size_t phys1 = phys0 + 1u;
+                    if (phys1 >= phys_blocks) {
+                        dev->status |= 2u;
+                        break;
+                    }
+                    size_t base0 = phys0 * 129u;
+                    size_t base1 = phys1 * 129u;
+                    for (size_t i = 0; i < 128u; ++i) {
+                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
+                        pdp8_api_write_mem(cpu, dest, unit->image[base0 + i]);
+                    }
+                    for (size_t i = 0; i < 128u; ++i) {
+                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)(i + 128u)) % mem_words);
+                        pdp8_api_write_mem(cpu, dest, unit->image[base1 + i]);
+                    }
                 }
             }
             dev->status |= 1u; /* ready */
