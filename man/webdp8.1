@@ -1,0 +1,121 @@
+.\" webdp8(1) manual page
+.TH WEBDP8 1 "December 2025" "waffle8" "User Commands"
+.
+.SH NAME
+webdp8 \- HTTP front\-end for the PDP\-8 emulator
+.
+.SH SYNOPSIS
+.B python3 tools/webdp8.py
+.
+.SH DESCRIPTION
+.B webdp8
+is a lightweight Flask server that wraps the PDP\-8 emulator shared library
+(.B factory/libpdp8.so )
+with a JSON REST API and minimal HTML control room. It creates the host
+simulator board so the TC08 DECtape controller (device 076/077), KL8E console,
+and line printer are attached on startup. Console and printer output are written
+to temporary files that the API exposes.
+.
+The server listens on
+.B 0.0.0.0:5000
+when run directly; there are no command\-line flags. Build the shared library
+before launching:
+.IP
+.EX
+cc -std=c11 -Wall -Wextra -pedantic -fPIC -shared src/emulator/*.c -o factory/libpdp8.so
+python3 tools/webdp8.py
+.EE
+.
+.SH ENDPOINTS
+All numeric values are octal strings unless noted.
+.TP
+.B GET /regs
+Return PC, AC, LINK, switch register, HALT state, and cycle counter.
+.TP
+.B GET /mem?addr=<octal>&len=<n>
+Read
+.I len
+words starting at
+.IR addr .
+.TP
+.B PUT /mem
+Write one word ({addr,val}) or a block ({start,values}).
+.TP
+.B POST /loader
+Upload a Motorola S\-record (S1/S9) and load it into memory; sets PC if the
+record supplies a start address and clears HALT.
+.TP
+.B POST /api/pdp8/assemble
+Assemble source and return SREC (optionally a listing).
+.TP
+.B POST /api/pdp8/assemble_and_load
+Assemble, load into memory, set PC (respecting start override), and clear HALT.
+.TP
+.B GET /trace?start=<pc>&cycles=<n>
+Step up to
+.I n
+cycles (max 1024), returning per\-step register traces.
+.TP
+.B GET /output/teleprinter
+Return KL8E console output since last read; ?peek=1 leaves the read pointer.
+.TP
+.B POST /input/keyboard
+Queue ASCII into the KL8E keyboard buffer ({chars:string}).
+.TP
+.B GET /output/printer
+Return line\-printer output since last read.
+.TP
+.B GET|PUT /switch
+Read or set the PDP\-8 switch register (OSR/SKP chains).
+.
+.SH ENVIRONMENT
+.TP
+.B TC08_IMAGE0
+Path to the read\-only DECtape image for TC08 unit 0
+(default
+.BR media/boot-tc08.tu56 ).
+.TP
+.B TC08_IMAGE1
+Path to the read/write DECtape image for TC08 unit 1
+(default
+.BR magtape/tc08-unit1.tu56 ).
+.TP
+.B FLASK_APP , FLASK_ENV
+Ignored when invoking
+.BR webdp8
+directly; the script runs Flask internally on port 5000.
+.
+.SH FILES
+.TP
+.B tools/webdp8.py
+Server implementation.
+.TP
+.B factory/libpdp8.so
+Native emulator shared library loaded by the server.
+.TP
+.B templates/index.html
+Minimal web UI served at
+.BR / .
+.
+.SH EXAMPLES
+.TP
+Load a program and trace 16 steps:
+.EX
+curl -F \"file=@demo/cal3.srec\" http://127.0.0.1:5000/loader
+curl \"http://127.0.0.1:5000/trace?cycles=16\"
+.EE
+.TP
+Mount alternative DECtapes before launch:
+.EX
+export TC08_IMAGE0=tapes/os8.tu56
+export TC08_IMAGE1=/tmp/scratch.tu56
+python3 tools/webdp8.py
+.EE
+.
+.SH SEE ALSO
+.BR pdp8 (1),
+.BR tc08 (1),
+.BR blkvue (1)
+.
+.SH AUTHOR
+waffle8 contributors
