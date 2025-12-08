@@ -67,6 +67,20 @@ Return line\-printer output since last read.
 .TP
 .B GET|PUT /switch
 Read or set the PDP\-8 switch register (OSR/SKP chains).
+.TP
+.B GET /tc08/status
+Report TC08 unit metadata (path, layout, size, writability, existence).
+.TP
+.B GET /tc08/dir/<unit>
+Parse OS/8 directory segments from the unit image; returns segment headers and
+entries with block numbers (octal and decimal).
+.TP
+.B GET /tc08/block/<unit>/<block>
+Read a DECtape block. Defaults to OS/8 logical layout; override with
+.BR ?layout=physical .
+Add
+.BR ?sixbit=1
+to include sixbit rendering of each word.
 .
 .SH ENVIRONMENT
 .TP

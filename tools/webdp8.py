@@ -2,6 +2,7 @@ from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 import ctypes
 import ctypes.util
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -16,6 +17,12 @@ if str(ROOT) not in sys.path:
 from factory.driver import load_srec
 from factory.ui import STATIC_DIR, TEMPLATES_DIR
 from tools.pdp8_asm import assemble_source
+from tools import tu56
+
+TC08_DEFAULTS = {
+    0: {"env": "TC08_IMAGE0", "path": "media/boot-tc08.tu56", "writable": False},
+    1: {"env": "TC08_IMAGE1", "path": "magtape/tc08-unit1.tu56", "writable": True},
+}
 
 app = Flask(
     __name__,
@@ -253,6 +260,51 @@ def asm_error_to_dict(err: Exception):
         "message": str(err),
         "source": getattr(err, "text", None),
     }
+
+
+def tc08_unit_config(unit: int):
+    cfg = TC08_DEFAULTS.get(unit)
+    if cfg is None:
+        raise ValueError(f"invalid TC08 unit {unit}")
+    path = os.environ.get(cfg["env"]) or cfg["path"]
+    return {
+        "unit": unit,
+        "path": path,
+        "writable": bool(cfg.get("writable")),
+    }
+
+
+def tc08_unit_status(unit: int):
+    cfg = tc08_unit_config(unit)
+    path = Path(cfg["path"])
+    status = {
+        "unit": unit,
+        "path": str(path),
+        "writable": cfg["writable"],
+        "exists": False,
+        "layout": "missing",
+    }
+    try:
+        st = path.stat()
+    except OSError:
+        return status
+
+    words = st.st_size // 2
+    layout = "unknown"
+    if words % tu56.OS8_LOGICAL_WORDS == 0:
+        layout = "os8-logical"
+    elif words % tu56.BLOCK_WORDS == 0:
+        layout = "physical"
+
+    status.update({
+        "exists": True,
+        "size_bytes": st.st_size,
+        "size_words": words,
+        "physical_blocks": st.st_size // tu56.BLOCK_BYTES,
+        "layout": layout,
+        "ready": True,
+    })
+    return status
 
 
 # ---------- /loader POST ----------
@@ -544,6 +596,111 @@ def get_mem():
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+
+# ---------- TC08 inspection ----------
+@app.get("/tc08/status")
+def get_tc08_status():
+    try:
+        units = [tc08_unit_status(unit) for unit in sorted(TC08_DEFAULTS.keys())]
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"units": units})
+
+
+@app.get("/tc08/dir/<int:unit>")
+def get_tc08_dir(unit: int):
+    try:
+        status = tc08_unit_status(unit)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not status.get("exists"):
+        return jsonify({"error": "image not found", "unit": unit, "path": status.get("path")}), 404
+
+    try:
+        segments = []
+        for block, header, entries in tu56.iter_directory(status["path"]):
+            segment = {
+                "block": block,
+                "block_octal": f"{block:04o}",
+                "header": {
+                    "count": header.get("count"),
+                    "origin": header.get("origin"),
+                    "origin_octal": f"{header.get('origin', 0):04o}",
+                    "link": header.get("link"),
+                    "link_octal": f"{header.get('link', 0):04o}",
+                    "free_blocks": header.get("free_blocks"),
+                },
+                "entries": [],
+            }
+            for entry in entries:
+                segment["entries"].append({
+                    "index": entry.get("index"),
+                    "name": entry.get("name"),
+                    "ext": entry.get("ext"),
+                    "status": entry.get("status"),
+                    "start_block": entry.get("start_block"),
+                    "start_block_octal": f"{entry.get('start_block', 0):04o}",
+                    "length_blocks": entry.get("length_blocks"),
+                    "length_blocks_octal": f"{entry.get('length_blocks', 0):04o}",
+                })
+            segments.append(segment)
+    except Exception as exc:
+        return jsonify({"error": str(exc), "unit": unit, "path": status.get("path")}), 500
+
+    return jsonify({
+        "unit": unit,
+        "path": status["path"],
+        "writable": status.get("writable", False),
+        "exists": True,
+        "layout": status.get("layout"),
+        "segments": segments,
+    })
+
+
+@app.get("/tc08/block/<int:unit>/<int:block>")
+def get_tc08_block(unit: int, block: int):
+    try:
+        status = tc08_unit_status(unit)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not status.get("exists"):
+        return jsonify({"error": "image not found", "unit": unit, "path": status.get("path")}), 404
+
+    layout = request.args.get("layout") or status.get("layout") or "os8-logical"
+    layout = layout.lower()
+    if layout not in {"os8-logical", "physical"}:
+        return jsonify({"error": f"unknown layout '{layout}'"}), 400
+
+    try:
+        if layout == "physical":
+            words = tu56.read_physical_block(status["path"], block)
+            layout_used = "physical"
+        else:
+            words = tu56.read_os8_block(status["path"], block)
+            layout_used = "os8-logical"
+    except Exception as exc:
+        return jsonify({"error": str(exc), "unit": unit, "block": block, "layout": layout}), 500
+
+    words_octal = [to_octal(w) for w in words]
+
+    resp = {
+        "unit": unit,
+        "path": status["path"],
+        "layout": layout_used,
+        "block": block,
+        "block_octal": f"{block:04o}",
+        "count": len(words_octal),
+        "words": words_octal,
+    }
+
+    sixbit = parse_bool(request.args.get("sixbit"), False)
+    if sixbit:
+        resp["sixbit"] = [tu56.sixbit_pair(w) for w in words]
+
+    return jsonify(resp)
 
 
 # ---------- teleprinter output (KL8E) ----------
