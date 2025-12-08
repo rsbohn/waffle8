@@ -1,0 +1,128 @@
+.\" tc08(1) manual page
+.TH TC08 1 "December 2025" "waffle8" "User Commands"
+.
+.SH NAME
+tc08 \- TC08 DECtape controller (device 076/077) for the PDP\-8 emulator
+.
+.SH SYNOPSIS
+The controller is attached automatically when creating the host simulator board
+or by linking
+.B src/emulator/tc08_device.c
+into
+.BR factory/libpdp8.so .
+Unit images are configured via environment:
+.IP
+.EX
+export TC08_IMAGE0=media/boot-tc08.tu56    # read\-only
+export TC08_IMAGE1=magtape/tc08-unit1.tu56 # read/write
+python3 tools/webdp8.py                    # or any host using libpdp8.so
+.EE
+.
+.SH DESCRIPTION
+The TC08 emulation provides a minimal DECtape data channel with two units
+(device code 076 plus the alternate code 077 for DTXA). It supports OS/8
+logical blocks (256 words) and read\-only access to physical frame images
+(129\-word frames, two per logical block). Unit 0 is read\-only by default; unit 1
+is writable and will be created on demand when an image path is supplied.
+.
+.SH IOT INSTRUCTIONS
+Device code
+.B 076
+unless noted; octal encodings shown.
+.TP
+.B DCR \- 6762
+Device clear/reset. Sets controller ready; clears transfer address and block.
+.TP
+.B DTSF \- 6764
+Skip if ready. Power\-up/reset leaves the device ready so the bootstrap loop
+will skip.
+.TP
+.B DTLB \- 6766
+Load block number and start transfer. The AC format:
+.RS
+.IP "\fBbits 0\-9\fR" 6
+Logical block number.
+.IP "\fBbit 10\fR" 6
+Unit select (0=unit0, 1=unit1).
+.IP "\fBbit 11\fR" 6
+Write flag (1=write core to tape, 0=read tape to core).
+.RE
+Uses the previously loaded transfer address. On success sets ready and issues a
+skip; on error sets error (bit 1) and does not skip.
+.TP
+.B GO \- 6767
+Defined but unused in the minimal model; transfers begin on DTLB.
+.TP
+.B DTXA \- 6771 (device 077)
+Load transfer address from AC.
+.
+.SH DATA TRANSFER
+For OS/8 logical tapes the controller moves 256 consecutive words. Reads and
+writes wrap at core size. Writes are rejected when the target unit is
+read\-only, when the image is a physical frame layout, or when capacity cannot
+be extended. Physical frame images are readable: the controller stitches pairs
+of 129\-word frames into one 256\-word logical block.
+.
+.SH ENVIRONMENT
+.TP
+.B TC08_IMAGE0
+Path to the unit0 DECtape image (default
+.BR media/boot-tc08.tu56 ).
+Read\-only.
+.TP
+.B TC08_IMAGE1
+Path to the unit1 DECtape image (default
+.BR magtape/tc08-unit1.tu56 ).
+Created if missing; read/write.
+.
+.SH EXAMPLES
+.TP
+Bootstrap block 0 from unit0 (OS/8 layout):
+.EX
+/ 1. set transfer address
+cla cma           / AC=7777 if desired
+dtca             \fR/ 6762\fP
+cla
+tad addr         / AC <- buffer start
+dtxa             \fR/ 6771\fP
+/ 2. start read of block 0, unit0
+cla              / AC=0 selects unit0 block0 read
+dtlb             \fR/ 6766\fP
+/ 3. skip if ready; error if no skip
+dtsf             \fR/ 6764\fP
+.
+addr,            / buffer lives here (256 words)
+.EE
+.TP
+Write block 1 to unit1:
+.EX
+cla
+tad addr         / AC <- buffer start
+dtxa             \fR/ 6771\fP
+cla
+tad (1)          / block 1
+tls              / ensure AC clean if needed
+tlc
+tad (02000)      / set unit1 bit
+tad (04000)      / set write bit
+dtlb             \fR/ 6766\fP
+.EE
+.
+.SH FILES
+.TP
+.B src/emulator/tc08_device.c
+Device implementation.
+.TP
+.B src/emulator/tc08_device.h
+IOT codes and public API.
+.TP
+.B factory/test_tc08.py
+Python smoke tests for DTSF and unit1 write/readback.
+.
+.SH SEE ALSO
+.BR webdp8 (1),
+.BR blkvue (1),
+.BR DECtape (tools/DECtape)
+.
+.SH AUTHOR
+waffle8 contributors
