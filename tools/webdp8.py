@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 # Use the S-record loader from the factory helper
 from factory.driver import load_srec
 from factory.ui import STATIC_DIR, TEMPLATES_DIR
+from tools.pdp8_asm import assemble_source
 
 app = Flask(
     __name__,
@@ -221,6 +222,20 @@ def parse_num(v):
 def to_octal(n):
     return f"{n & 0o7777:04o}"
 
+def parse_bool(val, default=False):
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).lower() in {"1", "true", "yes", "on"}
+
+def asm_error_to_dict(err: Exception):
+    return {
+        "line": getattr(err, "line_no", None),
+        "message": str(err),
+        "source": getattr(err, "text", None),
+    }
+
 
 # ---------- /loader POST ----------
 @app.post("/loader")
@@ -278,6 +293,136 @@ def post_loader():
         pass
 
     return jsonify({"written": written, "start": to_octal(start_word) if start_word is not None else None})
+
+
+# ---------- /api/pdp8/assemble ----------
+@app.post("/api/pdp8/assemble")
+def post_assemble():
+    include_listing = parse_bool(request.args.get("list"), False)
+    body = request.get_json(force=True, silent=True) if request.is_json else None
+
+    if isinstance(body, dict):
+        include_listing = parse_bool(body.get("include_listing"), include_listing)
+        source = body.get("source") or body.get("code")
+    else:
+        source = None
+
+    if source is None:
+        source = request.get_data(as_text=True)
+
+    if not source:
+        return jsonify({"success": False, "errors": [{"message": "source required"}]}), 400
+
+    srec_text, listing_text, start_addr, errors = assemble_source(source, include_listing=include_listing)
+    if errors:
+        resp = {"success": False, "errors": [asm_error_to_dict(err) for err in errors]}
+        if listing_text is not None:
+            resp["listing"] = listing_text
+        return jsonify(resp), 400
+
+    resp = {
+        "success": True,
+        "srec": srec_text,
+        "start_address": to_octal(start_addr) if start_addr is not None else None,
+    }
+    if listing_text is not None:
+        resp["listing"] = listing_text
+    return jsonify(resp)
+
+
+# ---------- /api/pdp8/assemble_and_load ----------
+@app.post("/api/pdp8/assemble_and_load")
+def post_assemble_and_load():
+    include_listing = parse_bool(request.args.get("list"), False)
+    auto_run = parse_bool(request.args.get("auto_run"), False)
+    start_override = None
+
+    body = request.get_json(force=True, silent=True) if request.is_json else None
+
+    if isinstance(body, dict):
+        include_listing = parse_bool(body.get("include_listing"), include_listing)
+        auto_run = parse_bool(body.get("auto_run"), auto_run)
+        if "start_addr" in body:
+            try:
+                start_override = parse_num(body["start_addr"])
+            except Exception as exc:
+                return jsonify({"success": False, "errors": [{"message": f"bad start_addr: {exc}"}]}), 400
+        source = body.get("source") or body.get("code")
+    else:
+        source = None
+
+    if source is None:
+        source = request.get_data(as_text=True)
+
+    if not source:
+        return jsonify({"success": False, "errors": [{"message": "source required"}]}), 400
+
+    srec_text, listing_text, start_addr, errors = assemble_source(source, include_listing=include_listing)
+    if errors:
+        resp = {"success": False, "errors": [asm_error_to_dict(err) for err in errors]}
+        if listing_text is not None:
+            resp["listing"] = listing_text
+        return jsonify(resp), 400
+
+    try:
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tf:
+            tf.write(srec_text)
+            tf.flush()
+            temp_path = Path(tf.name)
+
+        rom_words, start_word = load_srec(temp_path)
+    except Exception as exc:
+        return jsonify({"success": False, "errors": [{"message": str(exc)}]}), 400
+    finally:
+        try:
+            if "temp_path" in locals() and temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            pass
+
+    if start_override is not None:
+        start_word = start_override
+    elif start_word is None:
+        start_word = start_addr
+
+    written = []
+    for address, value in rom_words:
+        rc = lib.pdp8_api_write_mem(cpu, address & 0o7777, value & 0x0FFF)
+        if rc != 0:
+            return jsonify({"success": False, "errors": [{"message": f"write failed at {to_octal(address)}"}]}), 500
+        written.append({"addr": to_octal(address), "val": to_octal(value)})
+
+    if start_word is not None:
+        lib.pdp8_api_set_pc(cpu, start_word & 0o7777)
+
+    # Clear HALT so the program is ready to run; caller can control execution flow.
+    try:
+        lib.pdp8_api_clear_halt(cpu)
+    except Exception:
+        pass
+
+    state = {
+        "success": True,
+        "words_loaded": len(written),
+        "bytes_loaded": len(written) * 2,
+        "start_address": to_octal(start_word) if start_word is not None else None,
+        "pc": to_octal(lib.pdp8_api_get_pc(cpu)),
+        "halted": bool(lib.pdp8_api_is_halted(cpu)),
+        "written": written,
+        "srec": srec_text,
+    }
+    if listing_text is not None:
+        state["listing"] = listing_text
+
+    if auto_run:
+        # There is no background run loop; auto_run just ensures HALT is clear and PC is set.
+        try:
+            lib.pdp8_api_clear_halt(cpu)
+        except Exception:
+            pass
+
+    return jsonify(state)
+
 
 # ---------- /halt ----------
 @app.post("/halt")

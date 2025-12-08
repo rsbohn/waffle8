@@ -44,6 +44,8 @@ class AsmError(Exception):
     """Assembly error with optional line context."""
 
     def __init__(self, message: str, line_no: Optional[int] = None, text: Optional[str] = None):
+        self.line_no = line_no
+        self.text = text
         prefix = f"Line {line_no}: " if line_no is not None else ""
         if text:
             message = f"{message} [source: {text}]"
@@ -577,6 +579,43 @@ def assemble(path: Path, output: Path) -> None:
     assembler.first_pass()
     memory = assembler.second_pass()
     _write_srec(assembler, memory, output)
+
+
+def assemble_source(source: str, include_listing: bool = False) -> Tuple[Optional[str], Optional[str], Optional[int], List[AsmError]]:
+    """Assemble source text provided as a string.
+
+    Returns (srec_text, listing_text, start_address, errors). On success the
+    error list is empty; on failure srec_text/start_address are None and any
+    listing_text contains inline error markers if requested.
+    """
+    lines = source.splitlines()
+    assembler = PDP8Assembler(lines)
+    listing_rows: List[Tuple[Statement, Optional[int], Optional[AsmError]]] = []
+    errors: List[AsmError] = []
+
+    try:
+        assembler.first_pass()
+    except AsmError as exc:
+        errors.append(exc)
+
+    memory: Dict[int, int] = {}
+    if not errors:
+        memory, listing_rows, pass_errors = assembler.assemble_listing()
+        errors.extend(pass_errors)
+
+    listing_text = render_listing(Path("<memory>"), assembler, listing_rows, errors) if include_listing else None
+
+    if errors:
+        return None, listing_text, None, errors
+
+    if not memory:
+        empty_err = AsmError("No output generated; empty program?")
+        return None, listing_text, None, [empty_err]
+
+    start_addr = assembler.symbols.get("START", min(memory))
+    records = words_to_srec(memory, start_addr)
+    srec_text = "\n".join(records) + "\n"
+    return srec_text, listing_text, start_addr, []
 
 
 def main(argv: Sequence[str]) -> int:
