@@ -32,6 +32,12 @@ python3 tools/webdp8.py
 The server listens on 0.0.0.0:5000 by default. You can use `curl` to interact
 with it (examples below).
 
+The host-simulator board is created by default so the TC08 DECtape controller
+(device 076/077) is attached. DECtape images come from the environment:
+`TC08_IMAGE0` (default `media/boot-tc08.tu56`, read-only) and `TC08_IMAGE1`
+(default `magtape/tc08-unit1.tu56`, created if missing). Set these before
+launching to mount different `.tu56` images in the web demo.
+
 ## Endpoints
 
 All values returned are formatted as 4-digit octal strings where appropriate.

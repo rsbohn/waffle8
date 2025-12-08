@@ -30,6 +30,10 @@ app = Flask(
 lib = ctypes.CDLL("./factory/libpdp8.so")
 
 # configure signatures (same as debug_cal3.py) :contentReference[oaicite:1]{index=1}
+lib.pdp8_board_host_simulator.argtypes = []
+lib.pdp8_board_host_simulator.restype = ctypes.c_void_p
+lib.pdp8_api_create_for_board.argtypes = [ctypes.c_void_p]
+lib.pdp8_api_create_for_board.restype = ctypes.c_void_p
 lib.pdp8_api_create.argtypes = [ctypes.c_size_t]
 lib.pdp8_api_create.restype = ctypes.c_void_p
 lib.pdp8_api_destroy.argtypes = [ctypes.c_void_p]
@@ -106,7 +110,21 @@ lib.pdp8_api_get_switch_register.restype = ctypes.c_uint16
 lib.pdp8_api_is_halted.argtypes = [ctypes.c_void_p]
 lib.pdp8_api_is_halted.restype = ctypes.c_int
 
-cpu = lib.pdp8_api_create(0x1000)  # 4K core, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
+cpu = None
+try:
+    board = lib.pdp8_board_host_simulator()
+    if board:
+        # Attach board so TC08 DECtape and other board-wired devices come up.
+        cpu = lib.pdp8_api_create_for_board(board)
+except AttributeError:
+    pass
+except Exception as exc:
+    print(f"pdp8 board attach failed, falling back to bare CPU: {exc}", file=sys.stderr)
+    cpu = None
+
+if not cpu:
+    cpu = lib.pdp8_api_create(0x1000)  # 4K core fallback, matches debug_cal3.py :contentReference[oaicite:2]{index=2}
+
 lib.pdp8_api_set_halt(cpu)  # Start with HALT asserted
 cycles_counter = 0
 
