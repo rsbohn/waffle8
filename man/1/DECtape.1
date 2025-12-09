@@ -1,0 +1,113 @@
+.\" DECtape(1) manual page
+.TH DECtape 1 "May 2026" "waffle8" "User Commands"
+.
+.SH NAME
+DECtape \- inspect and edit OS/8 DECtape images (.tu56)
+.
+.SH SYNOPSIS
+.B tools/DECtape
+.I command
+.RI [ args ]
+.
+.SH DESCRIPTION
+.B DECtape
+is a Python utility for working with OS/8 DECtape images stored in SIMH .tu56
+format. It can dump raw 129\-word frames, view OS/8 logical blocks (256 words
+over two frames), walk directory segments, add host files, and print file
+contents. Directory walking follows DLINKs until the chain ends or loops.
+.
+.SH COMMANDS
+.TP
+.B read
+.RI "DECtape read " image " " block " [\-\-logical] [\-\-sixbit]"
+Dump a DECtape block. By default
+.I block
+is a physical 129\-word frame; use
+.B \-\-logical
+to read an OS/8 logical block spanning two frames. With
+.B \-\-sixbit
+the output is rendered as SIXBIT pairs instead of octal words.
+.TP
+.B dir
+.RI "DECtape dir " image " [" \-b " block ]"
+Parse and print an OS/8 directory segment. Defaults to block 1. The utility
+prints the header (entry count, origin, DLINK) and each entry’s status,
+start block, length in blocks, and raw date.
+.TP
+.B add
+.RI "DECtape add " image " " filename " [" \-n " os8name ]"
+Insert a host file into an OS/8 DECtape image (file must end with
+.BR .tu56 ).
+OS/8 names are uppercased and truncated to 6.2 characters. The image
+directory is updated to point at newly written blocks; remaining free space
+in the reused entry is split out when possible. Fails if the image or source
+file is missing or there is not enough free space.
+.TP
+.B cat
+.RI "DECtape cat " image " " os8file " [" \-a | \-\-ascii ]"
+Print file contents from the OS/8 image. The argument may be
+.I NAME.EXT
+or just
+.IR NAME ;
+when no extension is given the first name\-only match is used. With
+.B \-\-ascii
+the high bit of each byte is stripped (useful for ASCII\-8 text).
+.TP
+.B zero
+.RI "DECtape zero " image " [" \-b " blocks ] [" \-o " origin ] [" \-f ]"
+Create a blank OS/8 DECtape image filled with zeros and an empty directory at
+logical block 1. Defaults: 575 logical blocks (1150 physical frames) and
+origin block 070 (first data block). Refuses to overwrite existing files
+unless
+.B \-f
+is given.
+.
+.SH EXAMPLES
+.TP
+Dump logical block 20 as SIXBIT pairs:
+.EX
+tools/DECtape read \-\-logical \-\-sixbit media/boot-tc08.tu56 20
+.EE
+.TP
+List the directory chain starting at block 1:
+.EX
+tools/DECtape dir magtape/tc08-unit1.tu56
+.EE
+.TP
+Add a host text file under an explicit OS/8 name:
+.EX
+tools/DECtape add magtape/work.tu56 docs/note.txt \-n NOTE.TX
+.EE
+.TP
+Print a file as 7\-bit ASCII:
+.EX
+tools/DECtape cat \-a magtape/work.tu56 NOTE.TX
+.EE
+.TP
+Create a new writable image with a custom size:
+.EX
+tools/DECtape zero \-b 300 \-o 070 magtape/scratch.tu56
+.EE
+.
+.SH EXIT STATUS
+.TP
+.B 0
+Operation completed successfully.
+.TP
+.B nonzero
+An error occurred (missing file, invalid block number, no free space, or other
+argument/IO failure).
+.
+.SH FILES
+.TP
+.B tools/DECtape
+Command implementation.
+.TP
+.B tools/tu56/__init__.py
+Library used for frame and directory parsing, SIXBIT handling, and image
+creation.
+.
+.SH SEE ALSO
+.BR tc08 (1),
+.BR webdp8 (1),
+.BR 8asm (1)

@@ -19,6 +19,8 @@ BLOCK_BYTES = BLOCK_WORDS * 2  # packed little-endian 16-bit words on disk
 OS8_LOGICAL_WORDS = 256
 OS8_LOGICAL_BYTES = OS8_LOGICAL_WORDS * 2
 OS8_LOGICAL_STRIDE = 512  # OS/8 logical block size in bytes
+DEFAULT_OS8_LOGICAL_BLOCKS = 575  # Matches 1150 physical frames (common OS/8 DECtape size)
+DEFAULT_OS8_ORIGIN_BLOCK = 0o70   # First data block in OS/8 DECtape layout
 
 
 def _unpack_words(data: bytes) -> List[int]:
@@ -278,6 +280,56 @@ def write_os8_block(path: str, block: int, words: List[int]) -> None:
     w1 = list(words[128:]) + [0]  # checksum placeholder
     write_physical_block(path, phys0, w0)
     write_physical_block(path, phys1, w1)
+
+
+def format_empty_directory_block(origin_block: int, free_blocks: int, entries: int = 1) -> List[int]:
+    """Create a zeroed OS/8 directory block with a single free entry.
+
+    Args:
+        origin_block: First data block managed by the directory.
+        free_blocks: Total free blocks starting at origin_block.
+        entries: Number of directory entries (default 1 free entry).
+    """
+    words = [0] * OS8_LOGICAL_WORDS
+    if entries < 1:
+        entries = 1
+    words[0] = (-entries) & 0o7777  # directory entry count (negative)
+    words[1] = origin_block & 0o7777  # origin block
+    words[2] = 0  # no link to another directory block
+    words[3] = 0  # reserved
+    words[4] = 0  # reserved/checksum placeholder
+
+    # First directory entry: mark the entire data area free
+    entry_off = 5
+    words[entry_off + 0] = 0  # name word 1 (0 => free)
+    words[entry_off + 1] = 0  # name word 2
+    words[entry_off + 2] = 0  # name word 3
+    words[entry_off + 3] = 0  # extension
+    words[entry_off + 4] = 0  # date
+    words[entry_off + 5] = (-free_blocks) & 0o7777  # negative length = free space
+    return words
+
+
+def create_blank_tu56(path: str,
+                      logical_blocks: int = DEFAULT_OS8_LOGICAL_BLOCKS,
+                      origin_block: int = DEFAULT_OS8_ORIGIN_BLOCK,
+                      force: bool = False) -> None:
+    """Create a zero-filled .tu56 image with an empty OS/8 directory in block 1."""
+    if logical_blocks <= origin_block:
+        raise ValueError("logical_blocks must exceed origin_block for usable space.")
+    physical_blocks = logical_blocks * 2
+    total_bytes = physical_blocks * BLOCK_BYTES
+    if os.path.exists(path) and not force:
+        raise FileExistsError(f"{path} already exists. Use force=True to overwrite.")
+
+    # Pre-size the file with zeros
+    with open(path, "wb") as f:
+        f.truncate(total_bytes)
+
+    # Write an empty directory into logical block 1
+    free_blocks = logical_blocks - origin_block
+    dir_block = format_empty_directory_block(origin_block, free_blocks)
+    write_os8_block(path, 1, dir_block)
 
 
 def find_free_space(path: str, needed_blocks: int, start_block: int = 1) -> Tuple[int, int, int, List[int]]:

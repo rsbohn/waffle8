@@ -24,6 +24,9 @@ from tu56 import (
     sixbit_pair,
     add_file_to_image,
     list_files,
+    create_blank_tu56,
+    DEFAULT_OS8_LOGICAL_BLOCKS,
+    DEFAULT_OS8_ORIGIN_BLOCK,
 )
 
 
@@ -84,6 +87,15 @@ def main() -> None:
     p_cat.add_argument("filename", help="OS/8 filename (e.g., HELLO.TX or HELLO).")
     p_cat.add_argument("-a", "--ascii", action="store_true",
                        help="Strip high bit (for ASCII-8 files like .BA).")
+
+    p_zero = sub.add_parser("zero", help="Create a blank OS/8 DECtape image.")
+    p_zero.add_argument("image", help="Path to output .tu56 image.")
+    p_zero.add_argument("-b", "--blocks", type=int, default=DEFAULT_OS8_LOGICAL_BLOCKS,
+                        help=f"Number of OS/8 logical blocks (default {DEFAULT_OS8_LOGICAL_BLOCKS}).")
+    p_zero.add_argument("-o", "--origin", type=lambda v: int(v, 0), default=DEFAULT_OS8_ORIGIN_BLOCK,
+                        help=f"Origin data block (default octal {DEFAULT_OS8_ORIGIN_BLOCK:o}).")
+    p_zero.add_argument("-f", "--force", action="store_true",
+                        help="Overwrite existing file if present.")
 
     args = parser.parse_args()
     if args.cmd == "read":
@@ -171,6 +183,15 @@ def main() -> None:
                 if ch == 0:
                     continue  # skip nulls
                 sys.stdout.write(chr(ch))
+    elif args.cmd == "zero":
+        try:
+            create_blank_tu56(args.image, logical_blocks=args.blocks, origin_block=args.origin, force=args.force)
+        except FileExistsError as e:
+            sys.exit(str(e))
+        except ValueError as e:
+            sys.exit(f"Error: {e}")
+        total_phys = args.blocks * 2
+        print(f"Created {args.image} ({args.blocks} logical blocks, {total_phys} physical frames) with empty directory at block 1.")
     else:
         parser.print_help()
         sys.exit(2)
