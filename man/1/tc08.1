@@ -13,17 +13,20 @@ into
 Unit images are configured via environment:
 .IP
 .EX
-export TC08_IMAGE0=media/boot-tc08.tu56    # read\-only
-export TC08_IMAGE1=magtape/tc08-unit1.tu56 # read/write
+export TC08_IMAGE0=media/tape0.tu56        # read\-only
+export TC08_IMAGE1=media/tape1.tu56        # read/write
 python3 tools/webdp8.py                    # or any host using libpdp8.so
 .EE
 .
 .SH DESCRIPTION
 The TC08 emulation provides a minimal DECtape data channel with two units
-(device code 076 plus the alternate code 077 for DTXA). It supports OS/8
-logical blocks (256 words) and read\-only access to physical frame images
-(129\-word frames, two per logical block). Unit 0 is read\-only by default; unit 1
-is writable and will be created on demand when an image path is supplied.
+(device code 076 plus the alternate code 077 for DTXA). It requires physical
+frame images (129-word frames stored in .tu56 format) and assembles each OS/8
+logical transfer from two consecutive frames. Unit 0 is read-only by default;
+unit 1 is writable and will be created on demand when an image path is
+supplied. Each image is zero-extended to 1101 physical frames on load so a
+full tape’s worth of blocks is always present, and writable units persist the
+padding to disk the next time they flush.
 .
 .SH IOT INSTRUCTIONS
 Device code
@@ -57,22 +60,22 @@ Defined but unused in the minimal model; transfers begin on DTLB.
 Load transfer address from AC.
 .
 .SH DATA TRANSFER
-For OS/8 logical tapes the controller moves 256 consecutive words. Reads and
-writes wrap at core size. Writes are rejected when the target unit is
-read\-only, when the image is a physical frame layout, or when capacity cannot
-be extended. Physical frame images are readable: the controller stitches pairs
-of 129\-word frames into one 256\-word logical block.
+Every transfer moves 256 consecutive words by stitching two physical frames
+together (128 data words per frame; checksum words are cleared on writes).
+Reads and writes wrap at core size. Images must already be physical frame
+layouts: writes are rejected if the unit is read-only or the controller cannot
+extend the backing store.
 .
 .SH ENVIRONMENT
 .TP
 .B TC08_IMAGE0
 Path to the unit0 DECtape image (default
-.BR media/boot-tc08.tu56 ).
+.BR media/tape0.tu56 ).
 Read\-only.
 .TP
 .B TC08_IMAGE1
 Path to the unit1 DECtape image (default
-.BR magtape/tc08-unit1.tu56 ).
+.BR media/tape1.tu56 ).
 Created if missing; read/write.
 .
 .SH EXAMPLES

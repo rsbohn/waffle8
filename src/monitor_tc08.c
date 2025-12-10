@@ -14,9 +14,9 @@ enum monitor_command_status command_tc08(struct monitor_runtime *runtime,
     const char *tc08_image0 = getenv("TC08_IMAGE0");
     const char *tc08_image1 = getenv("TC08_IMAGE1");
     monitor_console_printf("  unit 0 (RO)      : %s\n",
-                           tc08_image0 ? tc08_image0 : "media/boot-tc08.tu56");
+                           tc08_image0 ? tc08_image0 : "media/tape0.tu56");
     monitor_console_printf("  unit 1 (RW)      : %s\n",
-                           tc08_image1 ? tc08_image1 : "magtape/tc08-unit1.tu56");
+                           tc08_image1 ? tc08_image1 : "media/tape1.tu56");
     monitor_console_puts("  status           : ready (minimal model)");
     return MONITOR_COMMAND_OK;
 }

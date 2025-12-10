@@ -34,8 +34,8 @@ with it (examples below).
 
 The host-simulator board is created by default so the TC08 DECtape controller
 (device 076/077) is attached. DECtape images come from the environment:
-`TC08_IMAGE0` (default `media/boot-tc08.tu56`, read-only) and `TC08_IMAGE1`
-(default `magtape/tc08-unit1.tu56`, created if missing). Set these before
+`TC08_IMAGE0` (default `media/tape0.tu56`, read-only) and `TC08_IMAGE1`
+(default `media/tape1.tu56`, created if missing). Set these before
 launching to mount different `.tu56` images in the web demo.
 
 ## Endpoints

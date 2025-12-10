@@ -38,7 +38,6 @@ typedef struct {
     uint16_t *image;
     size_t image_words;
     bool writable;
-    bool os8_logical_layout; /* true when stored as 256-word logical blocks, false for 129-word frames */
 } tc08_unit_t;
 
 struct pdp8_tc08_device {

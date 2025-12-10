@@ -20,8 +20,8 @@ from tools.pdp8_asm import assemble_source
 from tools import tu56
 
 TC08_DEFAULTS = {
-    0: {"env": "TC08_IMAGE0", "path": "media/boot-tc08.tu56", "writable": False},
-    1: {"env": "TC08_IMAGE1", "path": "magtape/tc08-unit1.tu56", "writable": True},
+    0: {"env": "TC08_IMAGE0", "path": "media/tape0.tu56", "writable": False},
+    1: {"env": "TC08_IMAGE1", "path": "media/tape1.tu56", "writable": True},
 }
 
 app = Flask(

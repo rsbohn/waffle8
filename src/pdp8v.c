@@ -825,14 +825,14 @@ int main(int argc, char **argv) {
         tc08_selected = getenv("TC08_IMAGE0");
     }
     if (!tc08_selected || *tc08_selected == '\0') {
-        tc08_selected = "media/boot-tc08.tu56";
+        tc08_selected = "media/tape0.tu56";
     }
     const char *tc08_selected1 = tc08_image1_path;
     if (!tc08_selected1 || *tc08_selected1 == '\0') {
         tc08_selected1 = getenv("TC08_IMAGE1");
     }
     if (!tc08_selected1 || *tc08_selected1 == '\0') {
-        tc08_selected1 = "magtape/tc08-unit1.tu56";
+        tc08_selected1 = "media/tape1.tu56";
     }
 
     const char *paper_tape_image = NULL;

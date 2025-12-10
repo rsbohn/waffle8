@@ -4,15 +4,59 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TC08_BLOCK_WORDS 256u
+#define TC08_FRAMES_PER_BLOCK 2u
+#define TC08_FRAME_WORDS 129u
+#define TC08_FRAME_DATA_WORDS 128u
+#define TC08_REQUIRED_FRAMES 1101u
 #define TC08_BLOCK_MASK 0x3FFu
 #define TC08_UNIT_SHIFT 10u
 #define TC08_UNIT_MASK 0x1u
 #define TC08_WRITE_FLAG 0x800u
 #define TC08_UNIT_COUNT 2u
 
-static size_t tc08_block_base(uint16_t block) {
-    return (size_t)block * TC08_BLOCK_WORDS;
+static void tc08_unit_free(tc08_unit_t *unit);
+static int tc08_unit_flush(const tc08_unit_t *unit);
+
+static size_t tc08_frame_base(size_t frame) {
+    return frame * TC08_FRAME_WORDS;
+}
+
+static size_t tc08_frames_for_block(uint16_t block) {
+    return (size_t)block * TC08_FRAMES_PER_BLOCK + TC08_FRAMES_PER_BLOCK;
+}
+
+static size_t tc08_required_words_for_block(uint16_t block) {
+    return tc08_frames_for_block(block) * TC08_FRAME_WORDS;
+}
+
+static size_t tc08_total_words(void) {
+    return (size_t)TC08_REQUIRED_FRAMES * TC08_FRAME_WORDS;
+}
+
+static int tc08_unit_pad_to_required_frames(tc08_unit_t *unit, bool *expanded) {
+    if (!unit) {
+        return -1;
+    }
+    size_t required_words = tc08_total_words();
+    if (unit->image_words >= required_words) {
+        if (expanded) {
+            *expanded = false;
+        }
+        return 0;
+    }
+    uint16_t *new_image = realloc(unit->image, required_words * sizeof(uint16_t));
+    if (!new_image) {
+        return -1;
+    }
+    for (size_t i = unit->image_words; i < required_words; ++i) {
+        new_image[i] = 0u;
+    }
+    unit->image = new_image;
+    unit->image_words = required_words;
+    if (expanded) {
+        *expanded = true;
+    }
+    return 0;
 }
 
 static void tc08_unit_init(tc08_unit_t *unit,
@@ -25,7 +69,6 @@ static void tc08_unit_init(tc08_unit_t *unit,
     unit->image = NULL;
     unit->image_words = 0;
     unit->writable = writable;
-    unit->os8_logical_layout = true; /* assume OS/8 logical blocks unless we detect frames */
     unit->path[0] = '\0';
 
     if (path && *path) {
@@ -56,10 +99,32 @@ static void tc08_unit_init(tc08_unit_t *unit,
                     }
                     unit->image[i] = ((uint16_t)buf[1] << 8 | (uint16_t)buf[0]) & 0x0FFFu;
                 }
-                if (unit->image_words % TC08_BLOCK_WORDS == 0u) {
-                    unit->os8_logical_layout = true;
-                } else if (unit->image_words % 129u == 0u) {
-                    unit->os8_logical_layout = false;
+            } else {
+                unit->image_words = 0;
+            }
+            if (unit->image || words == 0u) {
+                if (unit->image_words % TC08_FRAME_WORDS != 0u) {
+                    fprintf(stderr,
+                            "tc08: %s is not a physical-frame image; ignoring contents\n",
+                            unit->path);
+                    free(unit->image);
+                    unit->image = NULL;
+                    unit->image_words = 0;
+                } else {
+                    bool expanded = false;
+                    if (tc08_unit_pad_to_required_frames(unit, &expanded) != 0) {
+                        fprintf(stderr,
+                                "tc08: unable to size %s to %u frames\n",
+                                unit->path,
+                                (unsigned)TC08_REQUIRED_FRAMES);
+                        tc08_unit_free(unit);
+                    } else if (expanded && unit->writable && unit->path[0] != '\0') {
+                        if (tc08_unit_flush(unit) != 0) {
+                            fprintf(stderr,
+                                    "tc08: warning: failed to extend %s on disk\n",
+                                    unit->path);
+                        }
+                    }
                 }
             }
         }
@@ -114,7 +179,11 @@ static int tc08_unit_ensure_capacity(tc08_unit_t *unit, uint16_t block) {
     if (!unit) {
         return -1;
     }
-    size_t required_words = tc08_block_base((uint16_t)(block + 1u));
+    size_t required_words = tc08_required_words_for_block(block);
+    size_t min_words = tc08_total_words();
+    if (required_words < min_words) {
+        required_words = min_words;
+    }
     if (required_words <= unit->image_words) {
         return 0;
     }
@@ -169,19 +238,24 @@ static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
                     dev->status |= 2u;
                     break;
                 }
-                if (!unit->os8_logical_layout) {
-                    dev->status |= 2u; /* writing physical-frame images not supported */
-                    break;
-                }
-                if (tc08_unit_ensure_capacity(unit, block) != 0) {
+                if (tc08_unit_ensure_capacity(unit, block) != 0 || !unit->image) {
                     dev->status |= 2u;
                     break;
                 }
-                size_t base = tc08_block_base(block);
-                for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
+                size_t frame0 = (size_t)block * TC08_FRAMES_PER_BLOCK;
+                size_t frame1 = frame0 + 1u;
+                size_t base0 = tc08_frame_base(frame0);
+                size_t base1 = tc08_frame_base(frame1);
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
                     uint16_t src = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
-                    unit->image[base + i] = pdp8_api_read_mem(cpu, src) & 0x0FFFu;
+                    unit->image[base0 + i] = pdp8_api_read_mem(cpu, src) & 0x0FFFu;
                 }
+                unit->image[base0 + TC08_FRAME_DATA_WORDS] = 0u; /* checksum placeholder */
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+                    uint16_t src = (uint16_t)((dev->transfer_addr + (uint16_t)(i + TC08_FRAME_DATA_WORDS)) % mem_words);
+                    unit->image[base1 + i] = pdp8_api_read_mem(cpu, src) & 0x0FFFu;
+                }
+                unit->image[base1 + TC08_FRAME_DATA_WORDS] = 0u; /* checksum placeholder */
                 if (tc08_unit_flush(unit) != 0) {
                     dev->status |= 2u;
                     break;
@@ -191,35 +265,22 @@ static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
                     dev->status |= 2u;
                     break;
                 }
-                if (unit->os8_logical_layout) {
-                    size_t logical_blocks = unit->image_words / TC08_BLOCK_WORDS;
-                    if (block >= logical_blocks) {
-                        dev->status |= 2u;
-                        break;
-                    }
-                    size_t base = tc08_block_base(block);
-                    for (size_t i = 0; i < TC08_BLOCK_WORDS; ++i) {
-                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
-                        pdp8_api_write_mem(cpu, dest, unit->image[base + i]);
-                    }
-                } else {
-                    size_t phys_blocks = unit->image_words / 129u;
-                    size_t phys0 = (size_t)block * 2u;
-                    size_t phys1 = phys0 + 1u;
-                    if (phys1 >= phys_blocks) {
-                        dev->status |= 2u;
-                        break;
-                    }
-                    size_t base0 = phys0 * 129u;
-                    size_t base1 = phys1 * 129u;
-                    for (size_t i = 0; i < 128u; ++i) {
-                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
-                        pdp8_api_write_mem(cpu, dest, unit->image[base0 + i]);
-                    }
-                    for (size_t i = 0; i < 128u; ++i) {
-                        uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)(i + 128u)) % mem_words);
-                        pdp8_api_write_mem(cpu, dest, unit->image[base1 + i]);
-                    }
+                size_t total_frames = unit->image_words / TC08_FRAME_WORDS;
+                size_t frame0 = (size_t)block * TC08_FRAMES_PER_BLOCK;
+                size_t frame1 = frame0 + 1u;
+                if (frame1 >= total_frames) {
+                    dev->status |= 2u;
+                    break;
+                }
+                size_t base0 = tc08_frame_base(frame0);
+                size_t base1 = tc08_frame_base(frame1);
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+                    uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)i) % mem_words);
+                    pdp8_api_write_mem(cpu, dest, unit->image[base0 + i]);
+                }
+                for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+                    uint16_t dest = (uint16_t)((dev->transfer_addr + (uint16_t)(i + TC08_FRAME_DATA_WORDS)) % mem_words);
+                    pdp8_api_write_mem(cpu, dest, unit->image[base1 + i]);
                 }
             }
             dev->status |= 1u; /* ready */
@@ -239,11 +300,11 @@ pdp8_tc08_device_t *pdp8_tc08_device_create(void) {
 
     const char *path0 = getenv("TC08_IMAGE0");
     if (!path0 || *path0 == '\0') {
-        path0 = "media/boot-tc08.tu56";
+        path0 = "media/tape0.tu56";
     }
     const char *path1 = getenv("TC08_IMAGE1");
     if (!path1 || *path1 == '\0') {
-        path1 = "magtape/tc08-unit1.tu56";
+        path1 = "media/tape1.tu56";
     }
 
     tc08_unit_init(&dev->units[0], path0, false, false);
