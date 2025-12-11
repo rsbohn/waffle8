@@ -13,7 +13,7 @@ device line_printer {
 
 device paper_tape {
   iot = 667x
-  image = tapes/drygoods-2025-10.tap
+  image = media/lorem.tape
 }
 
 device paper_tape_punch {
@@ -29,7 +29,7 @@ device magtape0 {
 }
 
 device magtape1 {
-  path = magtape/2025.11
+  path = media/magtape
   unit = 1
   write_protected = false
 }
