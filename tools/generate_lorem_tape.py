@@ -84,7 +84,7 @@ def text_to_papertape(text, tape_id="TP001"):
     
     return "\n".join(tape_lines)
 
-def main():
+def autolorem():
     print("Generating Auto Manufacturer Lorem Ipsum Papertape...")
     
     # Generate automotive lorem ipsum
@@ -113,6 +113,16 @@ def main():
         print(f"  {line}")
     if len(lines) > 3:
         print(f"  ... and {len(lines)-3} more lines")
+
+def main():
+    from sys import argv
+    if len(argv) < 2:
+        autolorem()
+    else:
+        with open(argv[1], 'r') as f:
+            text = f.read()
+        papertape = text_to_papertape(text, "ZZ")
+        print(papertape)
 
 if __name__ == "__main__":
     main()
