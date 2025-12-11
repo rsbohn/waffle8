@@ -1,0 +1,45 @@
+device kl8e_console {
+  keyboard_iot = 603x
+  teleprinter_iot = 604x
+  keyboard_input = stdin
+  teleprinter_output = stdout
+}
+
+device line_printer {
+  iot = 660x
+  output = stdout
+  column_limit = 132
+}
+
+device paper_tape {
+  iot = 667x
+  image = tapes/drygoods-2025-10.tap
+}
+
+device paper_tape_punch {
+  iot = 602x
+  # optional: set enabled = false to disable punch attachment
+  output = tapes/ptp.out
+}
+
+device magtape0 {
+  path = demo
+  unit = 0
+  write_protected = true
+}
+
+device magtape1 {
+  path = magtape/2025.11
+  unit = 1
+  write_protected = false
+}
+
+device watchdog {
+  iot = 550x
+  enabled = true
+  # mode can be halt, reset, interrupt, or tick
+  mode = halt
+  periodic = false
+  default_count = 20
+  pause_on_halt = true
+}

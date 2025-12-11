@@ -1,0 +1,26 @@
+# build snapshot <tag>
+# to create <tag>.zip with the following structure
+waffle8/
+  bin/
+    monitor
+    pdp8v
+    moet
+    8asm
+    pdp8_asm.py
+    DECtape
+    tu56/__init__.py
+  demo/
+    blkvue.pa
+    cal3.asm
+    clock.asm
+    ptprint.asm
+    tc08write.asm
+  man/1/
+    *
+  media/
+    lorem.tape
+    tape0.tu56
+    tape1.tu56
+  pdp8.config.sample
+  pelican.txt
+  README.md
