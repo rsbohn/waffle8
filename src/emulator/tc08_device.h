@@ -51,6 +51,22 @@ struct pdp8_tc08_device {
 pdp8_tc08_device_t *pdp8_tc08_device_create(void);
 void pdp8_tc08_device_destroy(pdp8_tc08_device_t *device);
 int pdp8_tc08_device_attach(pdp8_t *cpu, pdp8_tc08_device_t *device);
+int pdp8_tc08_unit_attach(pdp8_tc08_device_t *device,
+                          int unit,
+                          const char *path,
+                          bool writable,
+                          bool create_if_missing);
+int pdp8_tc08_unit_detach(pdp8_tc08_device_t *device, int unit);
+int pdp8_tc08_unit_read_block(pdp8_tc08_device_t *device,
+                              pdp8_t *cpu,
+                              int unit,
+                              uint16_t block,
+                              uint16_t address);
+int pdp8_tc08_unit_write_block(pdp8_tc08_device_t *device,
+                               pdp8_t *cpu,
+                               int unit,
+                               uint16_t block,
+                               uint16_t address);
 
 #ifdef __cplusplus
 }

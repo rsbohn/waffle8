@@ -502,6 +502,13 @@ size_t pdp8_api_get_memory_words(const pdp8_t *cpu) {
     return cpu ? cpu->memory_words : 0u;
 }
 
+pdp8_tc08_device_t *pdp8_api_get_tc08_device(pdp8_t *cpu) {
+    if (!cpu) {
+        return NULL;
+    }
+    return (pdp8_tc08_device_t *)cpu->iot_contexts[PDP8_TC08_DEVICE_CODE];
+}
+
 int pdp8_api_load(pdp8_t *cpu, const uint16_t *words, size_t count, uint16_t start_address) {
     if (!cpu || !words) {
         return -1;

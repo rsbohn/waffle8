@@ -199,6 +199,13 @@ static int tc08_unit_ensure_capacity(tc08_unit_t *unit, uint16_t block) {
     return 0;
 }
 
+static tc08_unit_t *tc08_device_unit(pdp8_tc08_device_t *device, int unit) {
+    if (!device || unit < 0 || unit >= (int)TC08_UNIT_COUNT) {
+        return NULL;
+    }
+    return &device->units[unit];
+}
+
 static void tc08_device_iot(pdp8_t *cpu, uint16_t instruction, void *context) {
     pdp8_tc08_device_t *dev = (pdp8_tc08_device_t *)context;
     uint8_t func = instruction & 0x7;
@@ -331,6 +338,122 @@ int pdp8_tc08_device_attach(pdp8_t *cpu, pdp8_tc08_device_t *device) {
     }
     /* Register the alternate device code (077) for DTXA */
     if (pdp8_api_register_iot(cpu, PDP8_TC08_DEVICE_CODE_ALT, tc08_device_iot, device) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int pdp8_tc08_unit_attach(pdp8_tc08_device_t *device,
+                          int unit,
+                          const char *path,
+                          bool writable,
+                          bool create_if_missing) {
+    if (!device || !path || !*path) {
+        return -1;
+    }
+
+    tc08_unit_t *slot = tc08_device_unit(device, unit);
+    if (!slot) {
+        return -1;
+    }
+
+    FILE *fp = NULL;
+    if (writable) {
+        fp = fopen(path, "r+b");
+        if (!fp && create_if_missing) {
+            fp = fopen(path, "w+b");
+        }
+    } else {
+        fp = fopen(path, "rb");
+    }
+    if (!fp) {
+        return -1;
+    }
+    fclose(fp);
+
+    tc08_unit_free(slot);
+    tc08_unit_init(slot, path, writable, create_if_missing);
+    return 0;
+}
+
+int pdp8_tc08_unit_detach(pdp8_tc08_device_t *device, int unit) {
+    tc08_unit_t *slot = tc08_device_unit(device, unit);
+    if (!slot) {
+        return -1;
+    }
+    tc08_unit_free(slot);
+    slot->path[0] = '\0';
+    return 0;
+}
+
+int pdp8_tc08_unit_read_block(pdp8_tc08_device_t *device,
+                              pdp8_t *cpu,
+                              int unit,
+                              uint16_t block,
+                              uint16_t address) {
+    tc08_unit_t *slot = tc08_device_unit(device, unit);
+    if (!slot || !cpu || !slot->image) {
+        return -1;
+    }
+
+    size_t total_frames = slot->image_words / TC08_FRAME_WORDS;
+    size_t frame0 = (size_t)block * TC08_FRAMES_PER_BLOCK;
+    size_t frame1 = frame0 + 1u;
+    if (frame1 >= total_frames) {
+        return -1;
+    }
+
+    size_t mem_words = pdp8_api_get_memory_words(cpu);
+    if (mem_words == 0) {
+        return -1;
+    }
+
+    size_t base0 = tc08_frame_base(frame0);
+    size_t base1 = tc08_frame_base(frame1);
+    for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+        uint16_t dest = (uint16_t)((address + (uint16_t)i) % mem_words);
+        pdp8_api_write_mem(cpu, dest, slot->image[base0 + i]);
+    }
+    for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+        uint16_t dest = (uint16_t)((address + (uint16_t)(i + TC08_FRAME_DATA_WORDS)) % mem_words);
+        pdp8_api_write_mem(cpu, dest, slot->image[base1 + i]);
+    }
+    return 0;
+}
+
+int pdp8_tc08_unit_write_block(pdp8_tc08_device_t *device,
+                               pdp8_t *cpu,
+                               int unit,
+                               uint16_t block,
+                               uint16_t address) {
+    tc08_unit_t *slot = tc08_device_unit(device, unit);
+    if (!slot || !cpu || !slot->writable) {
+        return -1;
+    }
+
+    if (tc08_unit_ensure_capacity(slot, block) != 0 || !slot->image) {
+        return -1;
+    }
+
+    size_t mem_words = pdp8_api_get_memory_words(cpu);
+    if (mem_words == 0) {
+        return -1;
+    }
+
+    size_t frame0 = (size_t)block * TC08_FRAMES_PER_BLOCK;
+    size_t frame1 = frame0 + 1u;
+    size_t base0 = tc08_frame_base(frame0);
+    size_t base1 = tc08_frame_base(frame1);
+    for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+        uint16_t src = (uint16_t)((address + (uint16_t)i) % mem_words);
+        slot->image[base0 + i] = pdp8_api_read_mem(cpu, src);
+    }
+    for (size_t i = 0; i < TC08_FRAME_DATA_WORDS; ++i) {
+        uint16_t src = (uint16_t)((address + (uint16_t)(i + TC08_FRAME_DATA_WORDS)) % mem_words);
+        slot->image[base1 + i] = pdp8_api_read_mem(cpu, src);
+    }
+
+    if (tc08_unit_flush(slot) != 0) {
         return -1;
     }
     return 0;

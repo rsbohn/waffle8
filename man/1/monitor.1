@@ -85,6 +85,13 @@ Write the entire 4K RAM image to
 Load a RAM image previously saved with
 .BR save .
 .TP
+.B asm \fIfile\fP
+Assemble
+.I file
+with
+.BR tools/pdp8_asm.py ,
+write the resulting S-record alongside the source, and load it into memory.
+.TP
 .B read \fIfile\fP
 Load a Motorola S-record program into memory.
 .TP
@@ -93,6 +100,23 @@ Display the configured peripherals and their status.  Additional subtopics (for
 example,
 .B show magtape
 ) may appear depending on the configuration.
+.TP
+.B dt
+Show TC08 DECtape controller status (ready/error and image).
+.TP
+.B dt0 \fIaction\fP ...
+Operate on TC08 unit 0.  Actions:
+.BR "att|attach" " (attach \fIfile\fP [new]),"
+.BR "det|detach" ","
+.BR read " (read \fIblock\fP \fIaddr\fP), or"
+.BR write " (write \fIblock\fP \fIaddr\fP)."
+.TP
+.B dt1 \fIaction\fP ...
+Operate on TC08 unit 1.  Actions mirror
+.B dt0
+and support
+.B new
+to create a tape file when attaching.
 .TP
 .B magtape \fIunit\fP \fBrewind\fR|\fBnew\fR|\fBnext\fR
 Control magtape units: rewind current record, force a new output record, or

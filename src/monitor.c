@@ -12,6 +12,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "../src/emulator/pdp8.h"
 #include "../src/emulator/pdp8_board.h"
@@ -20,6 +22,7 @@
 #include "../src/emulator/paper_tape_device.h"
 #include "../src/emulator/paper_tape_punch.h"
 #include "../src/emulator/magtape_device.h"
+#include "../src/emulator/tc08_device.h"
 #include "../src/monitor_config.h"
 #include "../src/monitor_platform.h"
 #include <strings.h>
@@ -210,6 +213,7 @@ struct monitor_runtime {
     pdp8_paper_tape_device_t *paper_tape;
     pdp8_paper_tape_punch_t *paper_tape_punch;
     pdp8_magtape_device_t *magtape;
+    pdp8_tc08_device_t *tc08;
     pdp8_watchdog_t *watchdog;
     struct monitor_config config;
     bool config_loaded;
@@ -281,6 +285,29 @@ static void monitor_console_puts(const char *text) {
     monitor_platform_console_flush();
 }
 
+static void show_tc08_status(const pdp8_tc08_device_t *tc08) {
+    monitor_console_puts("TC08 DECtape controller");
+    monitor_console_puts("  device code      : 076x/077x");
+    if (!tc08) {
+        const char *tc08_image0 = getenv("TC08_IMAGE0");
+        const char *tc08_image1 = getenv("TC08_IMAGE1");
+        monitor_console_printf("  unit 0 (RO)      : %s\n",
+                               tc08_image0 ? tc08_image0 : "media/tape0.tu56");
+        monitor_console_printf("  unit 1 (RW)      : %s\n",
+                               tc08_image1 ? tc08_image1 : "media/tape1.tu56");
+        monitor_console_puts("  status           : ready (minimal model)");
+        return;
+    }
+
+    const tc08_unit_t *unit0 = &tc08->units[0];
+    const tc08_unit_t *unit1 = &tc08->units[1];
+    const char *unit0_path = unit0->path[0] ? unit0->path : "(detached)";
+    const char *unit1_path = unit1->path[0] ? unit1->path : "(detached)";
+    monitor_console_printf("  unit 0 (%s)      : %s\n", unit0->writable ? "RW" : "RO", unit0_path);
+    monitor_console_printf("  unit 1 (%s)      : %s\n", unit1->writable ? "RW" : "RO", unit1_path);
+    monitor_console_puts("  status           : ready (minimal model)");
+}
+
 
 static void show_devices(const struct monitor_runtime *runtime) {
     if (!runtime) {
@@ -346,12 +373,25 @@ static void show_devices(const struct monitor_runtime *runtime) {
 
     monitor_console_puts("  TC08 DECtape");
     monitor_console_puts("    device code      : 076x/077x");
-    const char *tc08_image0 = getenv("TC08_IMAGE0");
-    const char *tc08_image1 = getenv("TC08_IMAGE1");
-    monitor_console_printf("    unit 0 (RO)      : %s\n",
-                           tc08_image0 ? tc08_image0 : "media/tape0.tu56");
-    monitor_console_printf("    unit 1 (RW)      : %s\n",
-                           tc08_image1 ? tc08_image1 : "media/tape1.tu56");
+    if (runtime->tc08) {
+        const tc08_unit_t *unit0 = &runtime->tc08->units[0];
+        const tc08_unit_t *unit1 = &runtime->tc08->units[1];
+        const char *unit0_path = unit0->path[0] ? unit0->path : "(detached)";
+        const char *unit1_path = unit1->path[0] ? unit1->path : "(detached)";
+        monitor_console_printf("    unit 0 (%s)      : %s\n",
+                               unit0->writable ? "RW" : "RO",
+                               unit0_path);
+        monitor_console_printf("    unit 1 (%s)      : %s\n",
+                               unit1->writable ? "RW" : "RO",
+                               unit1_path);
+    } else {
+        const char *tc08_image0 = getenv("TC08_IMAGE0");
+        const char *tc08_image1 = getenv("TC08_IMAGE1");
+        monitor_console_printf("    unit 0 (RO)      : %s\n",
+                               tc08_image0 ? tc08_image0 : "media/tape0.tu56");
+        monitor_console_printf("    unit 1 (RW)      : %s\n",
+                               tc08_image1 ? tc08_image1 : "media/tape1.tu56");
+    }
     monitor_console_puts("    status           : ready (minimal model)");
 
     /* Watchdog device (configured via pdp8.config)
@@ -831,6 +871,12 @@ static enum monitor_command_status command_save(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_restore(struct monitor_runtime *runtime,
                                                    char **state);
+static enum monitor_command_status command_asm(struct monitor_runtime *runtime,
+                                               char **state);
+static enum monitor_command_status command_dt0(struct monitor_runtime *runtime,
+                                               char **state);
+static enum monitor_command_status command_dt1(struct monitor_runtime *runtime,
+                                               char **state);
 static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_keyboard_buffer(struct monitor_runtime *runtime,
@@ -839,21 +885,13 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
                                                   char **state);
-static enum monitor_command_status command_tc08(struct monitor_runtime *runtime,
-                                                char **state) {
+static enum monitor_command_status command_dt(struct monitor_runtime *runtime,
+                                              char **state) {
     (void)state;
     if (!runtime) {
         return MONITOR_COMMAND_ERROR;
     }
-    monitor_console_puts("TC08 DECtape controller");
-    monitor_console_puts("  device code      : 076x/077x");
-    const char *tc08_image0 = getenv("TC08_IMAGE0");
-    const char *tc08_image1 = getenv("TC08_IMAGE1");
-    monitor_console_printf("  unit 0 (RO)      : %s\n",
-                           tc08_image0 ? tc08_image0 : "media/tape0.tu56");
-    monitor_console_printf("  unit 1 (RW)      : %s\n",
-                           tc08_image1 ? tc08_image1 : "media/tape1.tu56");
-    monitor_console_puts("  status           : ready (minimal model)");
+    show_tc08_status(runtime->tc08);
     return MONITOR_COMMAND_OK;
 }
 static enum monitor_command_status command_reset(struct monitor_runtime *runtime,
@@ -883,6 +921,17 @@ static const struct monitor_command monitor_commands[] = {
     {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
     {"save", command_save, "save <file>", "Write RAM image to a file.", true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
+    {"asm", command_asm, "asm <file>", "Assemble source and load the generated S-record.", true},
+    {"dt0",
+     command_dt0,
+     "dt0 <att|det|read|write> ...",
+     "Manage TC08 unit 0 (attach/detach/read/write).",
+     true},
+    {"dt1",
+     command_dt1,
+     "dt1 <att|det|read|write> ...",
+     "Manage TC08 unit 1 (attach/detach/read/write).",
+     true},
     {"read", command_read, "read <file>", "Load Motorola S-record image.", true},
     {"kb",
      command_keyboard_buffer,
@@ -895,9 +944,9 @@ static const struct monitor_command monitor_commands[] = {
      "magtape <unit> <rewind|new|next>",
      "Control magnetic tape units (see 'show magtape').",
      true},
-    {"tc08",
-     command_tc08,
-     "tc08 status",
+    {"dt",
+     command_dt,
+     "dt status",
      "Show TC08 DECtape controller status (ready/error and image).",
      true},
     {"reset", command_reset, "reset", "Reset CPU and reload board ROM.", true},
@@ -1375,15 +1424,9 @@ static enum monitor_command_status command_restore(struct monitor_runtime *runti
     return MONITOR_COMMAND_OK;
 }
 
-static enum monitor_command_status command_read(struct monitor_runtime *runtime,
-                                                char **state) {
+static enum monitor_command_status load_srec_and_report(struct monitor_runtime *runtime,
+                                                        const char *path) {
     if (!runtime || !runtime->cpu) {
-        return MONITOR_COMMAND_ERROR;
-    }
-
-    char *path = command_next_token(state);
-    if (!path) {
-        monitor_console_puts("read requires file path.");
         return MONITOR_COMMAND_ERROR;
     }
 
@@ -1423,6 +1466,269 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
     }
 
     return MONITOR_COMMAND_OK;
+}
+
+static char *build_srec_path(const char *source_path) {
+    if (!source_path) {
+        return NULL;
+    }
+
+    const char *dot = strrchr(source_path, '.');
+    if (dot && (strcasecmp(dot, ".asm") == 0 || strcasecmp(dot, ".pa") == 0)) {
+        size_t base_len = (size_t)(dot - source_path);
+        size_t out_len = base_len + strlen(".srec") + 1u;
+        char *out_path = (char *)malloc(out_len);
+        if (!out_path) {
+            return NULL;
+        }
+        memcpy(out_path, source_path, base_len);
+        memcpy(out_path + base_len, ".srec", strlen(".srec") + 1u);
+        return out_path;
+    }
+
+    size_t source_len = strlen(source_path);
+    size_t out_len = source_len + strlen(".srec") + 1u;
+    char *out_path = (char *)malloc(out_len);
+    if (!out_path) {
+        return NULL;
+    }
+    memcpy(out_path, source_path, source_len);
+    memcpy(out_path + source_len, ".srec", strlen(".srec") + 1u);
+    return out_path;
+}
+
+static int run_assembler(const char *source_path, const char *output_path) {
+    if (!source_path || !output_path) {
+        return -1;
+    }
+
+    const char *assembler = "tools/pdp8_asm.py";
+    if (access(assembler, R_OK) != 0) {
+        monitor_console_printf("Assembler not found: %s\n", assembler);
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        monitor_console_printf("Unable to launch assembler: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        execlp("python3", "python3", assembler, source_path, output_path, (char *)NULL);
+        fprintf(stderr, "Unable to exec python3: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        monitor_console_printf("Waiting for assembler failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return 0;
+    }
+
+    if (WIFEXITED(status)) {
+        monitor_console_printf("Assembler failed (exit %d).\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        monitor_console_printf("Assembler terminated by signal %d.\n", WTERMSIG(status));
+    } else {
+        monitor_console_puts("Assembler terminated unexpectedly.");
+    }
+
+    return -1;
+}
+
+static enum monitor_command_status command_asm(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        monitor_console_puts("asm requires source file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        monitor_console_printf("Unable to open '%s': %s\n", path, strerror(errno));
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *srec_path = build_srec_path(path);
+    if (!srec_path) {
+        monitor_console_puts("Unable to allocate S-record path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (run_assembler(path, srec_path) != 0) {
+        free(srec_path);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    enum monitor_command_status status = load_srec_and_report(runtime, srec_path);
+    free(srec_path);
+    return status;
+}
+
+static enum monitor_command_status command_dt_unit(struct monitor_runtime *runtime,
+                                                   char **state,
+                                                   int unit) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->tc08) {
+        monitor_console_puts("TC08 device is not attached.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *action = command_next_token(state);
+    if (!action) {
+        monitor_console_printf("dt%d requires an action (att|det|read|write).\n", unit);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (strcmp(action, "att") == 0 || strcmp(action, "attach") == 0) {
+        char *path = command_next_token(state);
+        if (!path) {
+            monitor_console_puts("attach requires a file path.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        bool create_if_missing = false;
+        char *opt = command_next_token(state);
+        if (opt) {
+            if (strcmp(opt, "new") != 0) {
+                monitor_console_printf("Unknown attach option '%s'.\n", opt);
+                return MONITOR_COMMAND_ERROR;
+            }
+            create_if_missing = true;
+            if (command_next_token(state)) {
+                monitor_console_puts("attach takes at most one option (new).");
+                return MONITOR_COMMAND_ERROR;
+            }
+        }
+
+        if (!create_if_missing && access(path, F_OK) != 0) {
+            monitor_console_printf("File '%s' does not exist; use 'new' to create.\n", path);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        bool writable = true;
+        if (pdp8_tc08_unit_attach(runtime->tc08,
+                                  unit,
+                                  path,
+                                  writable,
+                                  create_if_missing) != 0) {
+            monitor_console_printf("Unable to attach '%s' to dt%d.\n", path, unit);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        monitor_console_printf("DT unit %d attached to %s.\n", unit, path);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(action, "det") == 0 || strcmp(action, "detach") == 0) {
+        if (command_next_token(state)) {
+            monitor_console_puts("detach does not take arguments.");
+            return MONITOR_COMMAND_ERROR;
+        }
+        if (pdp8_tc08_unit_detach(runtime->tc08, unit) != 0) {
+            monitor_console_printf("Unable to detach dt%d.\n", unit);
+            return MONITOR_COMMAND_ERROR;
+        }
+        monitor_console_printf("DT unit %d detached.\n", unit);
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(action, "read") == 0 || strcmp(action, "write") == 0) {
+        char *block_tok = command_next_token(state);
+        char *addr_tok = command_next_token(state);
+        if (!block_tok || !addr_tok) {
+            monitor_console_puts("read/write requires <block> <address>.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        long block_val = 0;
+        if (parse_number(block_tok, &block_val) != 0 || block_val < 0 || block_val > 0x3FF) {
+            monitor_console_printf("Invalid block '%s'.\n", block_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        long addr_val = 0;
+        if (parse_number(addr_tok, &addr_val) != 0) {
+            monitor_console_printf("Invalid address '%s'.\n", addr_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        size_t mem_words = runtime->memory_words;
+        if (mem_words == 0) {
+            mem_words = pdp8_api_get_memory_words(runtime->cpu);
+        }
+        if (addr_val < 0 || (size_t)addr_val >= mem_words) {
+            monitor_console_printf("Start address %04lo exceeds memory size.\n", addr_val);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        if (command_next_token(state)) {
+            monitor_console_puts("read/write takes exactly two arguments.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        uint16_t block = (uint16_t)block_val;
+        uint16_t address = (uint16_t)addr_val;
+        int rc = 0;
+
+        if (strcmp(action, "read") == 0) {
+            rc = pdp8_tc08_unit_read_block(runtime->tc08, runtime->cpu, unit, block, address);
+            if (rc != 0) {
+                monitor_console_printf("dt%d read failed.\n", unit);
+                return MONITOR_COMMAND_ERROR;
+            }
+            monitor_console_printf("dt%d read block %04o -> %04o.\n", unit, block, address);
+        } else {
+            rc = pdp8_tc08_unit_write_block(runtime->tc08, runtime->cpu, unit, block, address);
+            if (rc != 0) {
+                monitor_console_printf("dt%d write failed.\n", unit);
+                return MONITOR_COMMAND_ERROR;
+            }
+            monitor_console_printf("dt%d wrote block %04o <- %04o.\n", unit, block, address);
+        }
+
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_console_printf("Unknown dt%d action '%s'.\n", unit, action);
+    return MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status command_dt0(struct monitor_runtime *runtime,
+                                               char **state) {
+    return command_dt_unit(runtime, state, 0);
+}
+
+static enum monitor_command_status command_dt1(struct monitor_runtime *runtime,
+                                               char **state) {
+    return command_dt_unit(runtime, state, 1);
+}
+
+static enum monitor_command_status command_read(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        monitor_console_puts("read requires file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+    return load_srec_and_report(runtime, path);
 }
 
 static enum monitor_command_status command_keyboard_buffer(struct monitor_runtime *runtime,
@@ -1466,7 +1772,7 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
         monitor_console_puts("  devices   - list all attached devices");
         monitor_console_puts("  kl8e      - KL8E console status");
         monitor_console_puts("  console   - KL8E console status (alias)");
-        monitor_console_puts("  tc08      - TC08 DECtape controller");
+        monitor_console_puts("  dt        - TC08 DECtape controller");
         monitor_console_puts("  magtape   - TM8E magnetic tape status");
         monitor_console_puts("  watchdog  - watchdog timer status");
         return MONITOR_COMMAND_OK;
@@ -1477,15 +1783,8 @@ static enum monitor_command_status command_show(struct monitor_runtime *runtime,
         return MONITOR_COMMAND_OK;
     }
 
-    if (strcmp(topic, "tc08") == 0) {
-        monitor_console_puts("TC08 DECtape controller");
-        monitor_console_puts("  device code      : 076x/077x");
-        const char *tc08_image0 = getenv("TC08_IMAGE0");
-        const char *tc08_image1 = getenv("TC08_IMAGE1");
-        monitor_console_printf("  unit 0 (RO)      : %s\n",
-                       tc08_image0 ? tc08_image0 : "media/tape0.tu56");
-        monitor_console_printf("  unit 1 (RW)      : %s\n",
-                       tc08_image1 ? tc08_image1 : "media/tape1.tu56");
+    if (strcmp(topic, "dt") == 0) {
+        show_tc08_status(runtime->tc08);
         return MONITOR_COMMAND_OK;
     }
 
@@ -1805,6 +2104,7 @@ static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
         pdp8_api_destroy(runtime->cpu);
         runtime->cpu = NULL;
     }
+    runtime->tc08 = NULL;
     runtime->memory_words = 0u;
 }
 
@@ -1966,6 +2266,7 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
     if (!runtime->cpu) {
         return false;
     }
+    runtime->tc08 = pdp8_api_get_tc08_device(runtime->cpu);
 
     runtime->console = monitor_platform_create_console();
     if (!runtime->console) {

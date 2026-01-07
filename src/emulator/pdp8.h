@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef struct pdp8 pdp8_t;
+typedef struct pdp8_tc08_device pdp8_tc08_device_t;
 
 typedef void (*pdp8_iot_handler)(pdp8_t *cpu, uint16_t instruction, void *context);
 typedef void (*pdp8_tick_handler)(pdp8_t *cpu, void *context, uint64_t now_ns);
@@ -36,6 +37,7 @@ void pdp8_api_set_switch_register(pdp8_t *cpu, uint16_t value);
 uint16_t pdp8_api_get_switch_register(const pdp8_t *cpu);
 int pdp8_api_is_halted(const pdp8_t *cpu);
 size_t pdp8_api_get_memory_words(const pdp8_t *cpu);
+pdp8_tc08_device_t *pdp8_api_get_tc08_device(pdp8_t *cpu);
 
 /* Interrupt support - PDP-8 single interrupt line model
  *
