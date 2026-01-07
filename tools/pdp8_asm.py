@@ -18,6 +18,7 @@ Supported features:
   * Group 2 operate micro-ops (SMA, SZA, SNL, SPA, SNA, SZL, CLA, OSR, HLT, ION, IOFF)
   * Interrupt control: ION (enable), IOFF (disable), SKON (skip if on)
   * Data words specified as octal literals or quoted characters
+  * TEXT directive for ASCII strings using "...." or /..../
   * Multiple statements per line separated by semicolons
 
 The assembler emits Motorola S-records (S1) with byte addresses storing
@@ -117,9 +118,40 @@ class PDP8Assembler:
 
     @staticmethod
     def _strip_comment(text: str) -> str:
-        if "/" in text:
-            idx = text.index("/")
-            return text[:idx]
+        if "/" not in text:
+            return text
+        in_quote = False
+        in_slash_string = False
+        expecting_text_arg = False
+        current_word: List[str] = []
+        for idx, ch in enumerate(text):
+            if in_slash_string:
+                if ch == "/":
+                    in_slash_string = False
+                continue
+            if in_quote:
+                if ch == '"':
+                    in_quote = False
+                continue
+            if ch.isalnum() or ch == "_":
+                current_word.append(ch)
+                continue
+            if current_word:
+                word = "".join(current_word)
+                expecting_text_arg = word.upper() == "TEXT"
+                current_word = []
+            if ch == '"':
+                in_quote = True
+                expecting_text_arg = False
+                continue
+            if ch == "/":
+                if expecting_text_arg:
+                    in_slash_string = True
+                    expecting_text_arg = False
+                    continue
+                return text[:idx]
+            if ch == ";":
+                expecting_text_arg = False
         return text
 
     @staticmethod
@@ -212,10 +244,12 @@ class PDP8Assembler:
                 upper_tokens = [tok.upper() for tok in tokens]
                 op = upper_tokens[0]
 
-                # TEXT directive: TEXT "...." -> emit each character as an ASCII data word
+                # TEXT directive: TEXT "...." or TEXT /..../ -> emit each character as an ASCII data word
                 if op == "TEXT":
                     # locate quoted string in the original part to preserve spaces
                     m = re.search(r'"([^\"]*)"', part)
+                    if not m:
+                        m = re.search(r"/([^/]*)/", part)
                     if not m:
                         raise AsmError("TEXT requires a quoted string", line_no, part)
                     inner = m.group(1)
