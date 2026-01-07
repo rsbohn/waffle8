@@ -70,6 +70,13 @@ for the KL8E keyboard and stream it into the emulator one character at a time
 .B kb
 with no arguments prints buffer status (consumed/remaining and a preview).
 .TP
+.B tty read \fIfile\fP
+Queue
+.I file
+contents for the KL8E keyboard and stream it into the emulator one character at
+a time; an EOT (0x04) is appended automatically, and newlines are translated to
+carriage return.
+.TP
 .B run \fIaddr\fP \fIcycles\fP
 Set PC to
 .I addr

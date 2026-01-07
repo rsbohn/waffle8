@@ -848,6 +848,9 @@ static char *command_remaining_text(char **state) {
 static void monitor_keyboard_buffer_clear(struct monitor_runtime *runtime);
 static void monitor_keyboard_buffer_feed(struct monitor_runtime *runtime, size_t max_chars);
 static void monitor_keyboard_buffer_status(const struct monitor_runtime *runtime);
+static enum monitor_command_status monitor_keyboard_buffer_assign(struct monitor_runtime *runtime,
+                                                                  char *buffer,
+                                                                  size_t length);
 
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
                                                 char **state);
@@ -881,6 +884,8 @@ static enum monitor_command_status command_read(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_keyboard_buffer(struct monitor_runtime *runtime,
                                                            char **state);
+static enum monitor_command_status command_tty(struct monitor_runtime *runtime,
+                                               char **state);
 static enum monitor_command_status command_show(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_magtape(struct monitor_runtime *runtime,
@@ -938,6 +943,11 @@ static const struct monitor_command monitor_commands[] = {
      "kb <text>",
      "Queue text for KL8E keyboard input (streamed one character at a time).",
      true},
+    {"tty",
+     command_tty,
+     "tty read <file>",
+     "Queue a file for KL8E keyboard input (EOT appended).",
+     true},
     {"show", command_show, "show devices", "Display configured peripherals.", true},
     {"magtape",
      command_magtape,
@@ -981,6 +991,7 @@ static void print_help_listing(void) {
 }
 
 #define MONITOR_RUN_SLICE 2000u
+#define MONITOR_KL8E_EOT  0x04u
 
 enum monitor_go_stop_reason {
     MONITOR_GO_STOP_HALT = 0,
@@ -1746,18 +1757,116 @@ static enum monitor_command_status command_keyboard_buffer(struct monitor_runtim
     monitor_keyboard_buffer_clear(runtime);
 
     size_t length = strlen(text);
-    runtime->keyboard_buffer = (char *)malloc(length + 1u);
-    if (!runtime->keyboard_buffer) {
-        monitor_console_puts("Unable to allocate keyboard buffer.");
+    char *buffer = NULL;
+    if (length > 0u) {
+        buffer = (char *)malloc(length);
+        if (!buffer) {
+            monitor_console_puts("Unable to allocate keyboard buffer.");
+            return MONITOR_COMMAND_ERROR;
+        }
+        memcpy(buffer, text, length);
+    }
+
+    if (monitor_keyboard_buffer_assign(runtime, buffer, length) != MONITOR_COMMAND_OK) {
+        free(buffer);
         return MONITOR_COMMAND_ERROR;
     }
-    memcpy(runtime->keyboard_buffer, text, length + 1u);
-    runtime->keyboard_buffer_len = length;
-    runtime->keyboard_buffer_pos = 0u;
 
     monitor_console_printf("Queued %zu byte(s) for KL8E keyboard input.\n", length);
-    monitor_keyboard_buffer_feed(runtime, 1u);
     return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_tty(struct monitor_runtime *runtime,
+                                               char **state) {
+    if (!runtime || !runtime->console) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *action = command_next_token(state);
+    if (!action) {
+        monitor_console_puts("tty requires an action (read).");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (strcmp(action, "read") == 0) {
+        char *path = command_next_token(state);
+        if (!path) {
+            monitor_console_puts("tty read requires a file path.");
+            return MONITOR_COMMAND_ERROR;
+        }
+        if (command_next_token(state)) {
+            monitor_console_puts("tty read takes exactly one argument.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        monitor_keyboard_buffer_clear(runtime);
+
+        struct stat st;
+        if (stat(path, &st) != 0) {
+            monitor_console_printf("Unable to open '%s': %s\n", path, strerror(errno));
+            return MONITOR_COMMAND_ERROR;
+        }
+        if (st.st_size < 0) {
+            monitor_console_printf("Unable to read '%s': invalid file size.\n", path);
+            return MONITOR_COMMAND_ERROR;
+        }
+        if ((size_t)st.st_size > SIZE_MAX - 1u) {
+            monitor_console_printf("Unable to read '%s': file too large.\n", path);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        FILE *fp = fopen(path, "rb");
+        if (!fp) {
+            monitor_console_printf("Unable to open '%s': %s\n", path, strerror(errno));
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        size_t expected = (size_t)st.st_size;
+        char *buffer = NULL;
+        if (expected > 0u) {
+            buffer = (char *)malloc(expected + 1u);
+        } else {
+            buffer = (char *)malloc(1u);
+        }
+        if (!buffer) {
+            fclose(fp);
+            monitor_console_puts("Unable to allocate keyboard buffer.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        size_t read_total = 0u;
+        while (read_total < expected) {
+            size_t got = fread(buffer + read_total, 1u, expected - read_total, fp);
+            if (got == 0u) {
+                break;
+            }
+            read_total += got;
+        }
+
+        if (ferror(fp)) {
+            monitor_console_printf("Unable to read '%s': %s\n", path, strerror(errno));
+            free(buffer);
+            fclose(fp);
+            return MONITOR_COMMAND_ERROR;
+        }
+        fclose(fp);
+
+        buffer[read_total] = (char)MONITOR_KL8E_EOT;
+        size_t total_len = read_total + 1u;
+
+        if (monitor_keyboard_buffer_assign(runtime, buffer, total_len) != MONITOR_COMMAND_OK) {
+            free(buffer);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        monitor_console_printf("Queued %zu byte(s) from %s for KL8E keyboard input (EOT appended).\n",
+                               total_len,
+                               path);
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_console_printf("Unknown tty action '%s'.\n", action);
+    return MONITOR_COMMAND_ERROR;
 }
 
 static enum monitor_command_status command_show(struct monitor_runtime *runtime,
@@ -2002,6 +2111,27 @@ static void monitor_keyboard_buffer_clear(struct monitor_runtime *runtime) {
     }
     runtime->keyboard_buffer_len = 0u;
     runtime->keyboard_buffer_pos = 0u;
+}
+
+static enum monitor_command_status monitor_keyboard_buffer_assign(struct monitor_runtime *runtime,
+                                                                  char *buffer,
+                                                                  size_t length) {
+    if (!runtime || !runtime->console) {
+        return MONITOR_COMMAND_ERROR;
+    }
+    if (length > 0u && !buffer) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_keyboard_buffer_clear(runtime);
+    runtime->keyboard_buffer = buffer;
+    runtime->keyboard_buffer_len = length;
+    runtime->keyboard_buffer_pos = 0u;
+
+    if (length > 0u) {
+        monitor_keyboard_buffer_feed(runtime, 1u);
+    }
+    return MONITOR_COMMAND_OK;
 }
 
 static void monitor_keyboard_buffer_feed(struct monitor_runtime *runtime, size_t max_chars) {

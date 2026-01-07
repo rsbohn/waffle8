@@ -13,6 +13,7 @@ __pycache__
 basic_*/*
 bin/*
 checkpoint/*
+demo/*.srec
 disk/*
 extracted_*/*
 magtape/*

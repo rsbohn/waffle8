@@ -5,3 +5,4 @@
 - Translation: newline characters in the buffer are converted to carriage return before they are handed to the emulator; bytes are otherwise passed through and masked by the KL8E device.
 - Break handling: buffered characters do not trigger the `.` user-break shortcut; only live keyboard input can stop execution in that way.
 - Lifecycle: issuing another `kb` command replaces any pending buffer; the buffer is cleared automatically when all characters have been delivered or when the monitor shuts down.
+- Interaction: `tty read` uses the same buffer and replaces any pending `kb` text.
