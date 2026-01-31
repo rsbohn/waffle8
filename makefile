@@ -6,59 +6,16 @@ MONITOR_SOURCES = src/monitor.c \
         src/monitor_config.c \
         src/monitor_platform_posix.c
 
-MONITOR_OBJS = $(MONITOR_SOURCES) \
-	src/emulator/main.c \
-        src/emulator/board.c \
-        src/emulator/kl8e_console.c \
-        src/emulator/line_printer.c \
-	src/emulator/watchdog.c \
-	src/emulator/interrupt_control.c \
-        src/emulator/paper_tape.c \
-        src/emulator/paper_tape_device.c \
-        src/emulator/paper_tape_punch.c \
-        src/emulator/magtape_device.c \
-        src/emulator/tc08_device.c
+MONITOR_OBJS = $(MONITOR_SOURCES)
 
 PDP8V_OBJS = src/pdp8v.c \
         src/pdp8v_runtime.c \
         src/monitor_config.c \
-        src/monitor_platform_posix.c \
-	src/emulator/main.c \
-        src/emulator/board.c \
-        src/emulator/kl8e_console.c \
-        src/emulator/line_printer.c \
-	src/emulator/watchdog.c \
-	src/emulator/interrupt_control.c \
-        src/emulator/paper_tape.c \
-        src/emulator/paper_tape_device.c \
-        src/emulator/paper_tape_punch.c \
-        src/emulator/magtape_device.c \
-        src/emulator/tc08_device.c
+        src/monitor_platform_posix.c
 
-PDP8_BENCH_OBJS = tools/pdp8_bench.c \
-	src/emulator/main.c \
-	src/emulator/board.c \
-	src/emulator/kl8e_console.c \
-	src/emulator/line_printer.c \
-	src/emulator/watchdog.c \
-	src/emulator/interrupt_control.c \
-	src/emulator/paper_tape.c \
-	src/emulator/paper_tape_device.c \
-	src/emulator/paper_tape_punch.c \
-	src/emulator/magtape_device.c \
-	src/emulator/tc08_device.c
+PDP8_BENCH_OBJS = tools/pdp8_bench.c
 
-PDP8_FILTER_OBJS = src/pdp8_filter.c \
-	src/emulator/main.c \
-	src/emulator/board.c \
-	src/emulator/kl8e_console.c \
-	src/emulator/line_printer.c \
-	src/emulator/interrupt_control.c \
-	src/emulator/paper_tape.c \
-	src/emulator/paper_tape_device.c \
-	src/emulator/paper_tape_punch.c \
-	src/emulator/magtape_device.c \
-	src/emulator/tc08_device.c
+PDP8_FILTER_OBJS = src/pdp8_filter.c
 
 FACTORY_LIB = factory/libpdp8.so
 FACTORY_STATIC_LIB = factory/libpdp8.a
@@ -75,16 +32,16 @@ factory/%.o: src/emulator/%.c
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc -c $< -o $@
 
 bin/monitor: $(FACTORY_LIB) $(MONITOR_OBJS) | bin
-	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@
+	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -Lfactory -lpdp8 -Wl,-rpath,'$$ORIGIN/../factory' -o $@
 
 bin/monitor.static: $(FACTORY_STATIC_LIB) $(MONITOR_SOURCES) | bin
 	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(MONITOR_SOURCES) -Wl,-Bstatic -Lfactory -lpdp8 -Wl,-Bdynamic -o $@
 
 bin/pdp8v: $(FACTORY_LIB) $(PDP8V_OBJS) | bin
-	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@ -lncurses
+	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -Lfactory -lpdp8 -Wl,-rpath,'$$ORIGIN/../factory' -o $@ -lncurses
 
 bin/pdp8-filter: $(FACTORY_LIB) $(PDP8_FILTER_OBJS) | bin
-	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -o $@
+	$(HOST_CC) $(HOST_CFLAGS) -Isrc $(filter %.c,$^) -Lfactory -lpdp8 -Wl,-rpath,'$$ORIGIN/../factory' -o $@
 
 # Compatibility alias for old monitor target
 monitor: bin/monitor
@@ -92,11 +49,11 @@ monitor: bin/monitor
 bin:
 	mkdir -p bin
 
-tools/pdp8_bench: $(PDP8_BENCH_OBJS)
-	$(HOST_CC) $(HOST_CFLAGS) $(filter %.c,$^) -o $@
+tools/pdp8_bench: $(FACTORY_LIB) $(PDP8_BENCH_OBJS)
+	$(HOST_CC) $(HOST_CFLAGS) $(filter %.c,$^) -Lfactory -lpdp8 -Wl,-rpath,'$$ORIGIN/../factory' -o $@
 
 clean:
-	-@rm bin/monitor bin/monitor-static bin/pdp8v bin/pdp8-filter $(FACTORY_LIB) $(FACTORY_STATIC_LIB) $(FACTORY_STATIC_OBJS) tests/pdp8_tests tools/pdp8_bench
+	-@rm bin/monitor bin/monitor.static bin/pdp8v bin/pdp8-filter $(FACTORY_LIB) $(FACTORY_STATIC_LIB) $(FACTORY_STATIC_OBJS) tests/pdp8_tests tools/pdp8_bench
 	-@rmdir bin 2>/dev/null || true
 
 .SUFFIXES: .ft .pa

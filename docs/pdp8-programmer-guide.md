@@ -134,11 +134,14 @@ Most workflows rely on the shared library and the interactive monitor.
 
 ```bash
 # Build the shared library for tests and Python bindings
-cc -std=c11 -Wall -Wextra -pedantic -fPIC -shared src/emulator/*.c -o libpdp8.so
+make factory/libpdp8.so
 
 # Build the monitor (loads ROMs, inspects memory, runs programs)
 make monitor
 ```
+
+The host binaries link against `factory/libpdp8.so` and embed an rpath so they
+can be run from the repo without setting `LD_LIBRARY_PATH`.
 
 For regression runs, build and execute the unit tests:
 
@@ -179,10 +182,12 @@ session looks like:
 Monitor commands of interest:
 
 - `read <file>` – Load an additional S-record (your program).
+- `q` – Exit the monitor (alias of `quit`).
 - `switch load <addr>` – Set the PC to `<addr>` (defaults to octal).
 - `run <addr> <cycles>` – Set PC and run for a fixed number of cycles.
 - `t [cycles]` – Single-step while printing register state.
-- `mem <addr> [count]` – Dump memory words.
+- `mem <addr> [count]` – Dump memory words (`m` and `x` are aliases).
+- `stack ...` – Stack inspection helpers; see `docs/monitor-stack-ops.md`.
 
 For scripted runs that need to feed multiple commands reliably, prefer
 `tools/monitor_driver.py`:

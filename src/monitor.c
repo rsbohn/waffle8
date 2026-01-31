@@ -223,6 +223,10 @@ struct monitor_runtime {
     char *keyboard_buffer;
     size_t keyboard_buffer_len;
     size_t keyboard_buffer_pos;
+    uint16_t stack_base;
+    uint16_t stack_limit;
+    int stack_dir;
+    int stack_sp;
 };
 
 static pdp8_kl8e_console_t *g_console = NULL;
@@ -542,6 +546,62 @@ static int parse_number(const char *token, long *value) {
 
     *value = parsed;
     return 0;
+}
+
+enum monitor_stack_direction {
+    MONITOR_STACK_DIR_UP = 0,
+    MONITOR_STACK_DIR_DOWN = 1
+};
+
+static int stack_empty_sp(uint16_t base, uint16_t limit, int dir) {
+    if (dir == MONITOR_STACK_DIR_DOWN) {
+        return (int)limit + 1;
+    }
+    return (int)base - 1;
+}
+
+static size_t stack_depth(uint16_t base, uint16_t limit, int dir, int sp) {
+    if (dir == MONITOR_STACK_DIR_DOWN) {
+        if (sp > (int)limit) {
+            return 0u;
+        }
+        return (size_t)((int)limit - sp + 1);
+    }
+
+    if (sp < (int)base) {
+        return 0u;
+    }
+    return (size_t)(sp - (int)base + 1);
+}
+
+static bool stack_sp_valid(uint16_t base, uint16_t limit, int dir, int sp) {
+    int empty = stack_empty_sp(base, limit, dir);
+    if (sp == empty) {
+        return true;
+    }
+    return sp >= (int)base && sp <= (int)limit;
+}
+
+static bool stack_next_push(uint16_t base, uint16_t limit, int dir, int sp, int *next) {
+    if (!next) {
+        return false;
+    }
+
+    if (dir == MONITOR_STACK_DIR_DOWN) {
+        int candidate = (sp > (int)limit) ? (int)limit : sp - 1;
+        if (candidate < (int)base) {
+            return false;
+        }
+        *next = candidate;
+        return true;
+    }
+
+    int candidate = (sp < (int)base) ? (int)base : sp + 1;
+    if (candidate > (int)limit) {
+        return false;
+    }
+    *next = candidate;
+    return true;
 }
 
 static int load_srec_image(pdp8_t *cpu,
@@ -864,6 +924,10 @@ static enum monitor_command_status command_mem(struct monitor_runtime *runtime,
                                                char **state);
 static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
                                                char **state);
+static enum monitor_command_status command_stack(struct monitor_runtime *runtime,
+                                                 char **state);
+static enum monitor_command_status command_stack_pop_top(struct monitor_runtime *runtime,
+                                                         char **state);
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state);
 static enum monitor_command_status command_go(struct monitor_runtime *runtime,
@@ -908,6 +972,7 @@ static const struct monitor_command monitor_commands[] = {
     {"help", command_help, "help [command]", "Show command list or detailed help.", true},
     {"quit", command_quit, "quit", "Exit the monitor.", true},
     {"exit", command_quit, "exit", "Exit the monitor (alias of quit).", false},
+    {"q", command_quit, "q", "Exit the monitor (alias of quit).", false},
     {"regs", command_regs, "regs", "Show registers, halt, interrupt enable, and pending count.", true},
     {"switch",
      command_switch,
@@ -915,7 +980,12 @@ static const struct monitor_command monitor_commands[] = {
      "Show/set the front-panel switch register; 'load' copies it to PC.",
      true},
     {"mem", command_mem, "mem <addr> [count]", "Dump memory words (octal).", true},
+    {"m", command_mem, "m <addr> [count]", "Dump memory words (alias of mem).", false},
+    {"x", command_mem, "x <addr> [count]", "Dump memory words (alias of mem).", false},
     {"dep", command_dep, "dep <addr> <w0> [w1 ...]", "Deposit consecutive memory words.", true},
+    {"stack", command_stack, "stack <status|config|peek|push|pop|reset>",
+     "Inspect or manipulate the guest stack region.", true},
+    {".", command_stack_pop_top, ".", "Pop and print the stack top.", false},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
     {"go",
@@ -1015,6 +1085,12 @@ static void monitor_runtime_init(struct monitor_runtime *runtime) {
     runtime->keyboard_buffer = NULL;
     runtime->keyboard_buffer_len = 0u;
     runtime->keyboard_buffer_pos = 0u;
+    runtime->stack_base = 0170u;
+    runtime->stack_limit = 0177u;
+    runtime->stack_dir = MONITOR_STACK_DIR_UP;
+    runtime->stack_sp = stack_empty_sp(runtime->stack_base,
+                                       runtime->stack_limit,
+                                       runtime->stack_dir);
 }
 
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
@@ -1219,6 +1295,308 @@ static enum monitor_command_status command_dep(struct monitor_runtime *runtime,
                                (size_t)addr_val % runtime->memory_words);
     }
     return loaded > 0 ? MONITOR_COMMAND_OK : MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status stack_push_tokens(struct monitor_runtime *runtime,
+                                                     const char *first_token,
+                                                     char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    const char *token = first_token;
+    if (!token) {
+        monitor_console_puts("stack push requires at least one word.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t pushed = 0;
+    while (token) {
+        long word_val = 0;
+        if (parse_number(token, &word_val) != 0 || word_val < 0 || word_val > 0x0FFF) {
+            monitor_console_printf("Invalid word '%s'.\n", token);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        int next = 0;
+        if (!stack_next_push(runtime->stack_base, runtime->stack_limit,
+                             runtime->stack_dir, runtime->stack_sp, &next)) {
+            monitor_console_puts("Stack overflow.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        if ((size_t)next >= runtime->memory_words) {
+            monitor_console_printf("Stack address %04o out of range.\n", next & 0x0FFF);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        if (pdp8_api_write_mem(runtime->cpu, (uint16_t)next,
+                               (uint16_t)word_val) != 0) {
+            monitor_console_printf("Failed to write memory at %04o.\n",
+                                   (unsigned)next & 0x0FFFu);
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        runtime->stack_sp = next;
+        ++pushed;
+        token = command_next_token(state);
+    }
+
+    monitor_console_printf("Pushed %zu word(s).\n", pushed);
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status stack_peek(struct monitor_runtime *runtime,
+                                              size_t count) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t depth = stack_depth(runtime->stack_base, runtime->stack_limit,
+                               runtime->stack_dir, runtime->stack_sp);
+    if (depth == 0u) {
+        monitor_console_puts("Stack is empty.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (count == 0u) {
+        monitor_console_puts("Peek count must be positive.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (count > depth) {
+        count = depth;
+    }
+
+    monitor_console_printf("Top %zu word(s):", count);
+    int addr = runtime->stack_sp;
+    for (size_t i = 0; i < count; ++i) {
+        uint16_t word = pdp8_api_read_mem(runtime->cpu, (uint16_t)addr);
+        monitor_console_printf(" %04o", word & 0x0FFFu);
+        addr += (runtime->stack_dir == MONITOR_STACK_DIR_DOWN) ? 1 : -1;
+    }
+    monitor_platform_console_putc('\n');
+    monitor_platform_console_flush();
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status stack_pop(struct monitor_runtime *runtime,
+                                             size_t count) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t depth = stack_depth(runtime->stack_base, runtime->stack_limit,
+                               runtime->stack_dir, runtime->stack_sp);
+    if (depth == 0u) {
+        monitor_console_puts("Stack underflow.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (count == 0u) {
+        monitor_console_puts("Pop count must be positive.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (count > depth) {
+        monitor_console_puts("Stack underflow.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_console_printf("Popped %zu word(s):", count);
+    for (size_t i = 0; i < count; ++i) {
+        int addr = runtime->stack_sp;
+        uint16_t word = pdp8_api_read_mem(runtime->cpu, (uint16_t)addr);
+        monitor_console_printf(" %04o", word & 0x0FFFu);
+        runtime->stack_sp += (runtime->stack_dir == MONITOR_STACK_DIR_DOWN) ? 1 : -1;
+    }
+    monitor_platform_console_putc('\n');
+    monitor_platform_console_flush();
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_stack(struct monitor_runtime *runtime,
+                                                 char **state) {
+    if (!runtime) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *sub = command_next_token(state);
+    if (!sub || strcmp(sub, "status") == 0) {
+        size_t depth = stack_depth(runtime->stack_base, runtime->stack_limit,
+                                   runtime->stack_dir, runtime->stack_sp);
+        int empty = stack_empty_sp(runtime->stack_base, runtime->stack_limit,
+                                   runtime->stack_dir);
+        monitor_console_printf("Stack base=%04o limit=%04o dir=%s\n",
+                               runtime->stack_base & 0x0FFFu,
+                               runtime->stack_limit & 0x0FFFu,
+                               runtime->stack_dir == MONITOR_STACK_DIR_DOWN ? "down" : "up");
+        if (runtime->stack_sp == empty) {
+            monitor_console_puts("Stack pointer: (empty)");
+        } else {
+            monitor_console_printf("Stack pointer: %04o\n",
+                                   runtime->stack_sp & 0x0FFFu);
+        }
+        monitor_console_printf("Stack depth: %zu\n", depth);
+        if (depth > 0u) {
+            size_t preview = depth < 4u ? depth : 4u;
+            return stack_peek(runtime, preview);
+        }
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(sub, "config") == 0) {
+        uint16_t base = runtime->stack_base;
+        uint16_t limit = runtime->stack_limit;
+        int dir = runtime->stack_dir;
+        bool sp_set = false;
+        int sp = runtime->stack_sp;
+
+        char *token = NULL;
+        while ((token = command_next_token(state)) != NULL) {
+            char *eq = strchr(token, '=');
+            if (!eq || eq == token) {
+                monitor_console_printf("Invalid config token '%s'.\n", token);
+                return MONITOR_COMMAND_ERROR;
+            }
+            *eq = '\0';
+            const char *key = token;
+            const char *value = eq + 1;
+
+            if (strcmp(key, "dir") == 0) {
+                if (strcmp(value, "up") == 0) {
+                    dir = MONITOR_STACK_DIR_UP;
+                } else if (strcmp(value, "down") == 0) {
+                    dir = MONITOR_STACK_DIR_DOWN;
+                } else {
+                    monitor_console_printf("Invalid dir '%s'.\n", value);
+                    return MONITOR_COMMAND_ERROR;
+                }
+                continue;
+            }
+
+            long parsed = 0;
+            if (parse_number(value, &parsed) != 0 || parsed < 0 || parsed > 0x0FFF) {
+                monitor_console_printf("Invalid value '%s'.\n", value);
+                return MONITOR_COMMAND_ERROR;
+            }
+
+            if (strcmp(key, "base") == 0) {
+                base = (uint16_t)parsed;
+            } else if (strcmp(key, "limit") == 0) {
+                limit = (uint16_t)parsed;
+            } else if (strcmp(key, "sp") == 0) {
+                sp = (int)parsed;
+                sp_set = true;
+            } else {
+                monitor_console_printf("Unknown config key '%s'.\n", key);
+                return MONITOR_COMMAND_ERROR;
+            }
+        }
+
+        if (base > limit) {
+            monitor_console_puts("Stack base must be <= limit.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        if (runtime->memory_words > 0u &&
+            ((size_t)base >= runtime->memory_words ||
+             (size_t)limit >= runtime->memory_words)) {
+            monitor_console_puts("Stack base/limit exceeds memory size.");
+            return MONITOR_COMMAND_ERROR;
+        }
+
+        int empty = stack_empty_sp(base, limit, dir);
+        if (sp_set) {
+            if (!stack_sp_valid(base, limit, dir, sp)) {
+                monitor_console_puts("Stack pointer outside stack bounds.");
+                return MONITOR_COMMAND_ERROR;
+            }
+        } else {
+            if (!stack_sp_valid(base, limit, dir, sp)) {
+                sp = empty;
+            }
+        }
+
+        runtime->stack_base = base;
+        runtime->stack_limit = limit;
+        runtime->stack_dir = dir;
+        runtime->stack_sp = sp;
+        monitor_console_puts("Stack configuration updated.");
+        return MONITOR_COMMAND_OK;
+    }
+
+    if (strcmp(sub, "peek") == 0) {
+        char *count_tok = command_next_token(state);
+        long count_val = 4;
+        if (count_tok) {
+            if (parse_number(count_tok, &count_val) != 0 || count_val <= 0) {
+                monitor_console_printf("Invalid count '%s'.\n", count_tok);
+                return MONITOR_COMMAND_ERROR;
+            }
+        }
+        return stack_peek(runtime, (size_t)count_val);
+    }
+
+    if (strcmp(sub, "push") == 0) {
+        char *word_tok = command_next_token(state);
+        return stack_push_tokens(runtime, word_tok, state);
+    }
+
+    if (strcmp(sub, "pop") == 0) {
+        char *count_tok = command_next_token(state);
+        long count_val = 1;
+        if (count_tok) {
+            if (parse_number(count_tok, &count_val) != 0 || count_val <= 0) {
+                monitor_console_printf("Invalid count '%s'.\n", count_tok);
+                return MONITOR_COMMAND_ERROR;
+            }
+        }
+        return stack_pop(runtime, (size_t)count_val);
+    }
+
+    if (strcmp(sub, "reset") == 0) {
+        char *sp_tok = command_next_token(state);
+        if (!sp_tok) {
+            runtime->stack_sp = stack_empty_sp(runtime->stack_base,
+                                               runtime->stack_limit,
+                                               runtime->stack_dir);
+            monitor_console_puts("Stack pointer reset to empty.");
+            return MONITOR_COMMAND_OK;
+        }
+
+        long sp_val = 0;
+        if (parse_number(sp_tok, &sp_val) != 0 || sp_val < 0 || sp_val > 0x0FFF) {
+            monitor_console_printf("Invalid stack pointer '%s'.\n", sp_tok);
+            return MONITOR_COMMAND_ERROR;
+        }
+        int sp = (int)sp_val;
+        if (!stack_sp_valid(runtime->stack_base, runtime->stack_limit,
+                            runtime->stack_dir, sp)) {
+            monitor_console_puts("Stack pointer outside stack bounds.");
+            return MONITOR_COMMAND_ERROR;
+        }
+        runtime->stack_sp = sp;
+        monitor_console_puts("Stack pointer updated.");
+        return MONITOR_COMMAND_OK;
+    }
+
+    monitor_console_printf("Unknown stack subcommand '%s'.\n", sub);
+    return MONITOR_COMMAND_ERROR;
+}
+
+static enum monitor_command_status command_stack_pop_top(struct monitor_runtime *runtime,
+                                                         char **state) {
+    if (!runtime) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("'.' takes no arguments.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    return stack_pop(runtime, 1u);
 }
 
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
@@ -2643,6 +3021,12 @@ static int monitor_runtime_loop(struct monitor_runtime *runtime) {
 
         const struct monitor_command *command = find_command(cmd_name);
         if (!command) {
+            long value = 0;
+            if (parse_number(cmd_name, &value) == 0 && value >= 0 && value <= 0x0FFF) {
+                (void)stack_push_tokens(runtime, cmd_name, &saveptr);
+                continue;
+            }
+
             monitor_console_printf("Unknown command '%s'. Type 'help' for a list.\n", cmd_name);
             continue;
         }
