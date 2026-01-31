@@ -227,6 +227,10 @@ struct monitor_runtime {
     uint16_t stack_limit;
     int stack_dir;
     int stack_sp;
+    uint16_t edit_base;
+    int edit_active_unit;
+    uint16_t edit_block;
+    bool edit_block_valid;
 };
 
 static pdp8_kl8e_console_t *g_console = NULL;
@@ -604,6 +608,24 @@ static bool stack_next_push(uint16_t base, uint16_t limit, int dir, int sp, int 
     return true;
 }
 
+static bool stack_pop_value(struct monitor_runtime *runtime, uint16_t *out) {
+    if (!runtime || !runtime->cpu || !out) {
+        return false;
+    }
+
+    size_t depth = stack_depth(runtime->stack_base, runtime->stack_limit,
+                               runtime->stack_dir, runtime->stack_sp);
+    if (depth == 0u) {
+        return false;
+    }
+
+    int addr = runtime->stack_sp;
+    uint16_t word = pdp8_api_read_mem(runtime->cpu, (uint16_t)addr);
+    runtime->stack_sp += (runtime->stack_dir == MONITOR_STACK_DIR_DOWN) ? 1 : -1;
+    *out = word & 0x0FFFu;
+    return true;
+}
+
 static int load_srec_image(pdp8_t *cpu,
                            const char *path,
                            size_t memory_words,
@@ -928,6 +950,10 @@ static enum monitor_command_status command_stack(struct monitor_runtime *runtime
                                                  char **state);
 static enum monitor_command_status command_stack_pop_top(struct monitor_runtime *runtime,
                                                          char **state);
+static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
+                                                char **state);
+static enum monitor_command_status command_save(struct monitor_runtime *runtime,
+                                                char **state);
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state);
 static enum monitor_command_status command_go(struct monitor_runtime *runtime,
@@ -986,6 +1012,8 @@ static const struct monitor_command monitor_commands[] = {
     {"stack", command_stack, "stack <status|config|peek|push|pop|reset>",
      "Inspect or manipulate the guest stack region.", true},
     {".", command_stack_pop_top, ".", "Pop and print the stack top.", false},
+    {"edit", command_edit, "edit", "Read a DECtape block into the edit buffer (block on TOS).", true},
+    {"save", command_save, "save", "Write edit buffer to DECtape (block on TOS or current).", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
     {"go",
@@ -1091,6 +1119,10 @@ static void monitor_runtime_init(struct monitor_runtime *runtime) {
     runtime->stack_sp = stack_empty_sp(runtime->stack_base,
                                        runtime->stack_limit,
                                        runtime->stack_dir);
+    runtime->edit_base = 05000u;
+    runtime->edit_active_unit = 1;
+    runtime->edit_block = 0u;
+    runtime->edit_block_valid = false;
 }
 
 static enum monitor_command_status command_help(struct monitor_runtime *runtime,
@@ -1599,6 +1631,112 @@ static enum monitor_command_status command_stack_pop_top(struct monitor_runtime 
     return stack_pop(runtime, 1u);
 }
 
+static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("edit takes no arguments; push block number onto the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->tc08) {
+        monitor_console_puts("TC08 device is not attached.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t block = 0u;
+    if (!stack_pop_value(runtime, &block)) {
+        monitor_console_puts("edit requires a block number on the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t mem_words = runtime->memory_words;
+    if (mem_words == 0) {
+        mem_words = pdp8_api_get_memory_words(runtime->cpu);
+    }
+
+    const size_t block_words = 256u;
+    if (mem_words == 0 || runtime->edit_base >= mem_words ||
+        runtime->edit_base + block_words > mem_words) {
+        monitor_console_puts("Edit buffer exceeds memory size.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    int rc = pdp8_tc08_unit_read_block(runtime->tc08,
+                                       runtime->cpu,
+                                       runtime->edit_active_unit,
+                                       block,
+                                       runtime->edit_base);
+    if (rc != 0) {
+        monitor_console_printf("dt%d edit failed.\n", runtime->edit_active_unit);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    runtime->edit_block = block;
+    runtime->edit_block_valid = true;
+    monitor_console_printf("dt%d edit block %04o -> %04o.\n",
+                           runtime->edit_active_unit,
+                           block & 0x0FFFu,
+                           runtime->edit_base & 0x0FFFu);
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_save(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("save takes no arguments; push block number onto the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->tc08) {
+        monitor_console_puts("TC08 device is not attached.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t block = 0u;
+    if (!stack_pop_value(runtime, &block)) {
+        monitor_console_puts("save requires a block number on the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t mem_words = runtime->memory_words;
+    if (mem_words == 0) {
+        mem_words = pdp8_api_get_memory_words(runtime->cpu);
+    }
+
+    const size_t block_words = 256u;
+    if (mem_words == 0 || runtime->edit_base >= mem_words ||
+        runtime->edit_base + block_words > mem_words) {
+        monitor_console_puts("Edit buffer exceeds memory size.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    int rc = pdp8_tc08_unit_write_block(runtime->tc08,
+                                        runtime->cpu,
+                                        runtime->edit_active_unit,
+                                        block,
+                                        runtime->edit_base);
+    if (rc != 0) {
+        monitor_console_printf("dt%d save failed.\n", runtime->edit_active_unit);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    runtime->edit_block = block;
+    runtime->edit_block_valid = true;
+    monitor_console_printf("dt%d saved block %04o <- %04o.\n",
+                           runtime->edit_active_unit,
+                           block & 0x0FFFu,
+                           runtime->edit_base & 0x0FFFu);
+    return MONITOR_COMMAND_OK;
+}
+
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state) {
     if (!runtime || !runtime->cpu) {
@@ -1975,6 +2113,8 @@ static enum monitor_command_status command_dt_unit(struct monitor_runtime *runti
         monitor_console_puts("TC08 device is not attached.");
         return MONITOR_COMMAND_ERROR;
     }
+
+    runtime->edit_active_unit = unit;
 
     char *action = command_next_token(state);
     if (!action) {
