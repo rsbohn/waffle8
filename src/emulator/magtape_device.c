@@ -949,10 +949,34 @@ int pdp8_magtape_device_attach(pdp8_t *cpu, pdp8_magtape_device_t *device) {
     if (!cpu || !device) {
         return -1;
     }
-/* Reserve 076/077 for TC08 DECtape; host magtape uses the remaining slots. */
-static const uint8_t device_codes[] = {070u, 071u, 072u, 073u, 074u, 075u};
+    /*
+     * Magtape uses six microcode bits; bits 3-5 overlap the device code field.
+     * Register the base code and all non-conflicting aliases so 65xx/67xx opcodes work.
+     */
+    static const uint8_t device_codes[] = {
+        PDP8_MAGTAPE_DEVICE_CODE,
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 1u),
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 2u),
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 3u),
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 4u),
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 6u),
+        (uint8_t)(PDP8_MAGTAPE_DEVICE_CODE + 7u),
+        /* Legacy 670x range; reserve 076/077 for TC08. */
+        070u, 071u, 072u, 073u, 074u, 075u
+    };
     for (size_t i = 0; i < sizeof(device_codes) / sizeof(device_codes[0]); ++i) {
-        if (pdp8_api_register_iot(cpu, device_codes[i], magtape_device_iot, device) != 0) {
+        uint8_t code = device_codes[i];
+        bool duplicate = false;
+        for (size_t j = 0; j < i; ++j) {
+            if (device_codes[j] == code) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        if (pdp8_api_register_iot(cpu, code, magtape_device_iot, device) != 0) {
             return -1;
         }
     }

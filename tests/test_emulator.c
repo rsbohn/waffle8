@@ -931,7 +931,7 @@ static int test_paper_tape_punch_device(void) {
     pdp8_api_write_mem(cpu, 0005, 01010); /* TAD 0010 */
     pdp8_api_write_mem(cpu, 0006, PDP8_PAPER_TAPE_PUNCH_PPC);
     pdp8_api_write_mem(cpu, 0007, 07402);
-    pdp8_api_write_mem(cpu, 0010, 00065); /* ASCII 'A' */
+    pdp8_api_write_mem(cpu, 0010, 00101); /* ASCII 'A' */
 
     pdp8_api_set_pc(cpu, 0000);
     ASSERT_INT_EQ("initial PSF executes", 1, pdp8_api_step(cpu));

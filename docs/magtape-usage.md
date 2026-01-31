@@ -24,9 +24,14 @@ device magtape1 {
 ## IOT Instructions
 
 ## Device Code
-The magtape now uses device code **050** (octal) with these operations:
+The magtape uses base device code **050** (octal) with these operations:
 
 > **Note:** Device code **074** (octal) and IOT 6740 are reserved for the TC08 controller.
+>
+> **Compatibility:** Magtape opcodes use six microcode bits, so bits 3-5 overlap the device code
+> field. To keep 65xx and legacy 67xx opcodes working, the emulator registers magtape IOT
+> handlers for the base code and the non-conflicting aliases in the 050-057 range, plus the
+> 070-075 legacy aliases.
 
 | Octal | Binary | Name    | Description                           |
 |-------|--------|---------|---------------------------------------|
