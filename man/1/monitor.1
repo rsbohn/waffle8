@@ -23,6 +23,9 @@ octal; prefix with
 for decimal or
 .B 0x
 for hexadecimal.
+Multiple tokens on a line are processed left-to-right; standalone numbers are
+pushed onto the monitor stack, enabling sequences like
+.BR "5 6 . ." .
 .SH COMMANDS
 .TP
 .B help [command]
@@ -52,6 +55,10 @@ words of memory starting at
 .B dep \fIaddr\fP \fIw0\fP [w1 ...]
 Deposit consecutive words beginning at
 .IR addr .
+.TP
+.B edit
+Pop a DECtape logical block number from the monitor stack and load the
+256-word block into the edit buffer at 05000 (octal).
 .TP
 .B c [cycles]
 Continue execution in blocks of up to 2000 cycles.  Defaults to one cycle.
@@ -84,9 +91,13 @@ and run for
 .I cycles
 instructions.
 .TP
-.B save \fIfile\fP
-Write the entire 4K RAM image to
+.B save [\fIfile\fP]
+When
+.I file
+is supplied, write the entire 4K RAM image to
 .IR file .
+When invoked without arguments, pop a DECtape logical block number from the
+monitor stack and write the 256-word edit buffer (base 05000) to that block.
 .TP
 .B restore \fIfile\fP
 Load a RAM image previously saved with

@@ -608,6 +608,30 @@ static bool stack_next_push(uint16_t base, uint16_t limit, int dir, int sp, int 
     return true;
 }
 
+static bool stack_push_value(struct monitor_runtime *runtime, uint16_t value) {
+    if (!runtime || !runtime->cpu) {
+        return false;
+    }
+
+    int next = 0;
+    if (!stack_next_push(runtime->stack_base, runtime->stack_limit,
+                         runtime->stack_dir, runtime->stack_sp, &next)) {
+        return false;
+    }
+
+    if ((size_t)next >= runtime->memory_words) {
+        return false;
+    }
+
+    if (pdp8_api_write_mem(runtime->cpu, (uint16_t)next,
+                           (uint16_t)(value & 0x0FFFu)) != 0) {
+        return false;
+    }
+
+    runtime->stack_sp = next;
+    return true;
+}
+
 static bool stack_pop_value(struct monitor_runtime *runtime, uint16_t *out) {
     if (!runtime || !runtime->cpu || !out) {
         return false;
@@ -924,6 +948,10 @@ static char *command_remaining_text(char **state) {
     while (*cursor && isspace((unsigned char)*cursor)) {
         ++cursor;
     }
+    if (!*cursor) {
+        return NULL;
+    }
+    *state = cursor + strlen(cursor);
     return *cursor ? cursor : NULL;
 }
 
@@ -954,14 +982,17 @@ static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_save(struct monitor_runtime *runtime,
                                                 char **state);
+static enum monitor_command_status command_save_block(struct monitor_runtime *runtime,
+                                                      char **state);
+static enum monitor_command_status command_save_image(struct monitor_runtime *runtime,
+                                                      const char *path,
+                                                      char **state);
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state);
 static enum monitor_command_status command_go(struct monitor_runtime *runtime,
                                               char **state);
 static enum monitor_command_status command_run(struct monitor_runtime *runtime,
                                                char **state);
-static enum monitor_command_status command_save(struct monitor_runtime *runtime,
-                                                char **state);
 static enum monitor_command_status command_restore(struct monitor_runtime *runtime,
                                                    char **state);
 static enum monitor_command_status command_asm(struct monitor_runtime *runtime,
@@ -1013,7 +1044,6 @@ static const struct monitor_command monitor_commands[] = {
      "Inspect or manipulate the guest stack region.", true},
     {".", command_stack_pop_top, ".", "Pop and print the stack top.", false},
     {"edit", command_edit, "edit", "Read a DECtape block into the edit buffer (block on TOS).", true},
-    {"save", command_save, "save", "Write edit buffer to DECtape (block on TOS or current).", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
     {"go",
@@ -1022,7 +1052,11 @@ static const struct monitor_command monitor_commands[] = {
      "Run until halt, interrupt, or '.' (optional start address).",
      true},
     {"run", command_run, "run <addr> <cycles>", "Set PC and execute for a number of cycles.", true},
-    {"save", command_save, "save <file>", "Write RAM image to a file.", true},
+    {"save",
+     command_save,
+     "save [file]",
+     "With file: save RAM image. With no args: save edit buffer to DECtape (block on TOS).",
+     true},
     {"restore", command_restore, "restore <file>", "Load RAM image from a file.", true},
     {"asm", command_asm, "asm <file>", "Assemble source and load the generated S-record.", true},
     {"dt0",
@@ -1684,8 +1718,8 @@ static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
     return MONITOR_COMMAND_OK;
 }
 
-static enum monitor_command_status command_save(struct monitor_runtime *runtime,
-                                                char **state) {
+static enum monitor_command_status command_save_block(struct monitor_runtime *runtime,
+                                                      char **state) {
     if (!runtime || !runtime->cpu) {
         return MONITOR_COMMAND_ERROR;
     }
@@ -1735,6 +1769,20 @@ static enum monitor_command_status command_save(struct monitor_runtime *runtime,
                            block & 0x0FFFu,
                            runtime->edit_base & 0x0FFFu);
     return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_save(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *path = command_next_token(state);
+    if (!path) {
+        return command_save_block(runtime, state);
+    }
+
+    return command_save_image(runtime, path, state);
 }
 
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
@@ -1881,15 +1929,20 @@ static enum monitor_command_status command_run(struct monitor_runtime *runtime,
     return MONITOR_COMMAND_OK;
 }
 
-static enum monitor_command_status command_save(struct monitor_runtime *runtime,
-                                                char **state) {
+static enum monitor_command_status command_save_image(struct monitor_runtime *runtime,
+                                                      const char *path,
+                                                      char **state) {
     if (!runtime || !runtime->cpu) {
         return MONITOR_COMMAND_ERROR;
     }
 
-    char *path = command_next_token(state);
     if (!path) {
         monitor_console_puts("save requires file path.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("save takes at most one file path.");
         return MONITOR_COMMAND_ERROR;
     }
 
@@ -3154,26 +3207,31 @@ static int monitor_runtime_loop(struct monitor_runtime *runtime) {
         line[strcspn(line, "\r\n")] = '\0';
 
         char *saveptr = NULL;
-        char *cmd_name = strtok_r(line, " \t", &saveptr);
-        if (!cmd_name) {
-            continue;
-        }
-
-        const struct monitor_command *command = find_command(cmd_name);
-        if (!command) {
-            long value = 0;
-            if (parse_number(cmd_name, &value) == 0 && value >= 0 && value <= 0x0FFF) {
-                (void)stack_push_tokens(runtime, cmd_name, &saveptr);
-                continue;
+        char *token = strtok_r(line, " \t", &saveptr);
+        while (token) {
+            const struct monitor_command *command = find_command(token);
+            if (command) {
+                enum monitor_command_status status = command->handler(runtime, &saveptr);
+                if (status == MONITOR_COMMAND_EXIT) {
+                    return EXIT_SUCCESS;
+                }
+                if (status == MONITOR_COMMAND_ERROR) {
+                    break;
+                }
+            } else {
+                long value = 0;
+                if (parse_number(token, &value) == 0 && value >= 0 && value <= 0x0FFF) {
+                    if (!stack_push_value(runtime, (uint16_t)value)) {
+                        monitor_console_puts("Stack overflow.");
+                        break;
+                    }
+                } else {
+                    monitor_console_printf("Unknown command '%s'. Type 'help' for a list.\n", token);
+                    break;
+                }
             }
 
-            monitor_console_printf("Unknown command '%s'. Type 'help' for a list.\n", cmd_name);
-            continue;
-        }
-
-        enum monitor_command_status status = command->handler(runtime, &saveptr);
-        if (status == MONITOR_COMMAND_EXIT) {
-            return EXIT_SUCCESS;
+            token = strtok_r(NULL, " \t", &saveptr);
         }
     }
 
