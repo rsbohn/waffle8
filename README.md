@@ -57,6 +57,10 @@ A historically accurate PDP-8 minicomputer emulator running the RTS-8 real-time 
 - Use `./tools/dump-rom <image.srec>` to print the decoded 12-bit words in octal, eight words per line.
 - The monitor `save` and `restore` commands operate on raw 12-bit word dumps; convert as needed when moving between S-record files and monitor sessions.
 
+## Learning Resources
+
+- `docs/lab-stack-operations.md` – Comprehensive lab activity with five hands-on experiments teaching stack operations on the PDP-8, including PUSH/POP implementation, overflow/underflow detection, parameter passing, and practical applications like string reversal. Includes working assembly code examples in `docs/examples/`.
+
 ## RTS-8 Features Used
 
 - Interrupt-driven I/O: All device handlers use interrupts
