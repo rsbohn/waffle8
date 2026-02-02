@@ -223,6 +223,8 @@ struct monitor_runtime {
     char *keyboard_buffer;
     size_t keyboard_buffer_len;
     size_t keyboard_buffer_pos;
+    uint8_t *breakpoints;
+    size_t breakpoint_count;
     uint16_t stack_base;
     uint16_t stack_limit;
     int stack_dir;
@@ -923,7 +925,11 @@ struct monitor_command;
 typedef enum monitor_command_status (*monitor_command_handler)(struct monitor_runtime *runtime,
                                                                char **state);
 
-static int run_with_console(struct monitor_runtime *runtime, size_t cycles);
+static int run_with_console(struct monitor_runtime *runtime,
+                            size_t cycles,
+                            bool allow_breakpoint_step,
+                            bool *break_hit,
+                            uint16_t *breakpoint_addr);
 
 struct monitor_command {
     const char *name;
@@ -1030,6 +1036,8 @@ static enum monitor_command_status command_reset(struct monitor_runtime *runtime
                                                  char **state);
 static enum monitor_command_status command_trace(struct monitor_runtime *runtime,
                                                  char **state);
+static enum monitor_command_status command_break(struct monitor_runtime *runtime,
+                                                 char **state);
 
 static const struct monitor_command monitor_commands[] = {
     {"help", command_help, "help [command]", "Show command list or detailed help.", true},
@@ -1053,6 +1061,7 @@ static const struct monitor_command monitor_commands[] = {
     {"load", command_load, "load", "Assemble and load a DECtape block (block on TOS).", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
+    {"break", command_break, "break", "Toggle breakpoint at address on the stack.", true},
     {"go",
      command_go,
      "go [addr]",
@@ -1136,12 +1145,18 @@ enum monitor_go_stop_reason {
     MONITOR_GO_STOP_HALT = 0,
     MONITOR_GO_STOP_INTERRUPT,
     MONITOR_GO_STOP_USER,
+    MONITOR_GO_STOP_BREAKPOINT,
     MONITOR_GO_STOP_ERROR
 };
 
 static bool go_pump_keyboard(struct monitor_runtime *runtime, bool *user_break);
 static int go_run_until_event(struct monitor_runtime *runtime,
-                              enum monitor_go_stop_reason *stop_reason);
+                              enum monitor_go_stop_reason *stop_reason,
+                              uint16_t *breakpoint_addr);
+static bool monitor_breakpoint_hit(const struct monitor_runtime *runtime, uint16_t *addr_out);
+static bool monitor_breakpoint_toggle(struct monitor_runtime *runtime,
+                                      uint16_t addr,
+                                      bool *enabled);
 
 static void monitor_runtime_init(struct monitor_runtime *runtime) {
     if (!runtime) {
@@ -1154,6 +1169,8 @@ static void monitor_runtime_init(struct monitor_runtime *runtime) {
     runtime->keyboard_buffer = NULL;
     runtime->keyboard_buffer_len = 0u;
     runtime->keyboard_buffer_pos = 0u;
+    runtime->breakpoints = NULL;
+    runtime->breakpoint_count = 0u;
     runtime->stack_base = 0170u;
     runtime->stack_limit = 0177u;
     runtime->stack_dir = MONITOR_STACK_DIR_UP;
@@ -1923,7 +1940,9 @@ static enum monitor_command_status command_continue(struct monitor_runtime *runt
 
     pdp8_api_clear_halt(runtime->cpu);
     size_t cycles = (size_t)cycles_val;
-    int executed = run_with_console(runtime, cycles);
+    bool break_hit = false;
+    uint16_t break_addr = 0u;
+    int executed = run_with_console(runtime, cycles, true, &break_hit, &break_addr);
     if (executed < 0) {
         monitor_console_puts("Continue failed.");
         return MONITOR_COMMAND_ERROR;
@@ -1933,6 +1952,9 @@ static enum monitor_command_status command_continue(struct monitor_runtime *runt
                            executed,
                            pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
                            pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
+    if (break_hit) {
+        monitor_console_printf("Breakpoint hit at %04o.\n", break_addr & 0x0FFFu);
+    }
     return MONITOR_COMMAND_OK;
 }
 
@@ -1965,13 +1987,15 @@ static enum monitor_command_status command_go(struct monitor_runtime *runtime,
     pdp8_api_clear_halt(runtime->cpu);
 
     enum monitor_go_stop_reason stop_reason = MONITOR_GO_STOP_ERROR;
-    int executed = go_run_until_event(runtime, &stop_reason);
+    uint16_t break_addr = 0u;
+    int executed = go_run_until_event(runtime, &stop_reason, &break_addr);
     if (executed < 0 || stop_reason == MONITOR_GO_STOP_ERROR) {
         monitor_console_puts("go failed.");
         return MONITOR_COMMAND_ERROR;
     }
 
     const char *reason_text = "unknown";
+    char reason_buffer[64];
     switch (stop_reason) {
         case MONITOR_GO_STOP_HALT:
             reason_text = "HALT";
@@ -1981,6 +2005,11 @@ static enum monitor_command_status command_go(struct monitor_runtime *runtime,
             break;
         case MONITOR_GO_STOP_USER:
             reason_text = "user break '.'";
+            break;
+        case MONITOR_GO_STOP_BREAKPOINT:
+            snprintf(reason_buffer, sizeof(reason_buffer), "breakpoint %04o",
+                     break_addr & 0x0FFFu);
+            reason_text = reason_buffer;
             break;
         default:
             reason_text = "unknown";
@@ -2037,7 +2066,9 @@ static enum monitor_command_status command_run(struct monitor_runtime *runtime,
     pdp8_api_clear_halt(runtime->cpu);
     pdp8_api_set_pc(runtime->cpu, (uint16_t)(start_val & 0x0FFFu));
     size_t cycles = (size_t)cycles_val;
-    int executed = run_with_console(runtime, cycles);
+    bool break_hit = false;
+    uint16_t break_addr = 0u;
+    int executed = run_with_console(runtime, cycles, false, &break_hit, &break_addr);
     if (executed < 0) {
         monitor_console_puts("Run failed.");
         return MONITOR_COMMAND_ERROR;
@@ -2047,6 +2078,9 @@ static enum monitor_command_status command_run(struct monitor_runtime *runtime,
                            executed,
                            pdp8_api_get_pc(runtime->cpu) & 0x0FFFu,
                            pdp8_api_is_halted(runtime->cpu) ? "yes" : "no");
+    if (break_hit) {
+        monitor_console_printf("Breakpoint hit at %04o.\n", break_addr & 0x0FFFu);
+    }
     return MONITOR_COMMAND_OK;
 }
 
@@ -2793,6 +2827,49 @@ static enum monitor_command_status command_trace(struct monitor_runtime *runtime
     return MONITOR_COMMAND_OK;
 }
 
+static enum monitor_command_status command_break(struct monitor_runtime *runtime,
+                                                 char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("break takes no arguments; push address onto the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->breakpoints) {
+        monitor_console_puts("Breakpoints are unavailable.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t addr = 0u;
+    if (!stack_pop_value(runtime, &addr)) {
+        monitor_console_puts("break requires an address on the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t mem_words = runtime->memory_words;
+    if (mem_words == 0u) {
+        mem_words = pdp8_api_get_memory_words(runtime->cpu);
+    }
+    if (mem_words == 0u || (size_t)addr >= mem_words) {
+        monitor_console_printf("Breakpoint address %04o exceeds memory size.\n", addr & 0x0FFFu);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    bool enabled = false;
+    if (!monitor_breakpoint_toggle(runtime, addr, &enabled)) {
+        monitor_console_puts("Unable to toggle breakpoint.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    monitor_console_printf("Breakpoint %s at %04o.\n",
+                           enabled ? "set" : "cleared",
+                           addr & 0x0FFFu);
+    return MONITOR_COMMAND_OK;
+}
+
 static void monitor_keyboard_buffer_clear(struct monitor_runtime *runtime) {
     if (!runtime) {
         return;
@@ -2922,6 +2999,11 @@ static void monitor_runtime_teardown(struct monitor_runtime *runtime) {
         runtime->console = NULL;
     }
     monitor_keyboard_buffer_clear(runtime);
+    if (runtime->breakpoints) {
+        free(runtime->breakpoints);
+        runtime->breakpoints = NULL;
+    }
+    runtime->breakpoint_count = 0u;
     if (runtime->cpu) {
         pdp8_api_destroy(runtime->cpu);
         runtime->cpu = NULL;
@@ -2972,13 +3054,67 @@ static bool go_pump_keyboard(struct monitor_runtime *runtime, bool *user_break) 
     return saw_input;
 }
 
+static bool monitor_breakpoint_hit(const struct monitor_runtime *runtime, uint16_t *addr_out) {
+    if (addr_out) {
+        *addr_out = 0u;
+    }
+    if (!runtime || !runtime->cpu || !runtime->breakpoints || runtime->breakpoint_count == 0u) {
+        return false;
+    }
+
+    uint16_t pc = pdp8_api_get_pc(runtime->cpu) & 0x0FFFu;
+    if ((size_t)pc >= runtime->memory_words) {
+        return false;
+    }
+
+    if (runtime->breakpoints[pc] == 0u) {
+        return false;
+    }
+
+    if (addr_out) {
+        *addr_out = pc;
+    }
+    return true;
+}
+
+static bool monitor_breakpoint_toggle(struct monitor_runtime *runtime,
+                                      uint16_t addr,
+                                      bool *enabled) {
+    if (enabled) {
+        *enabled = false;
+    }
+    if (!runtime || !runtime->breakpoints) {
+        return false;
+    }
+    if ((size_t)addr >= runtime->memory_words) {
+        return false;
+    }
+
+    if (runtime->breakpoints[addr] != 0u) {
+        runtime->breakpoints[addr] = 0u;
+        if (runtime->breakpoint_count > 0u) {
+            runtime->breakpoint_count--;
+        }
+        return true;
+    }
+
+    runtime->breakpoints[addr] = 1u;
+    runtime->breakpoint_count++;
+    if (enabled) {
+        *enabled = true;
+    }
+    return true;
+}
+
 static int go_run_until_event(struct monitor_runtime *runtime,
-                              enum monitor_go_stop_reason *stop_reason) {
+                              enum monitor_go_stop_reason *stop_reason,
+                              uint16_t *breakpoint_addr) {
     if (!runtime || !runtime->cpu) {
         return -1;
     }
 
     enum monitor_go_stop_reason reason = MONITOR_GO_STOP_ERROR;
+    uint16_t hit_breakpoint = 0u;
     int total_executed = 0;
 
     for (;;) {
@@ -2999,12 +3135,25 @@ static int go_run_until_event(struct monitor_runtime *runtime,
             break;
         }
 
-        int executed = pdp8_api_run(runtime->cpu, MONITOR_RUN_SLICE);
+        if (monitor_breakpoint_hit(runtime, &hit_breakpoint)) {
+            reason = MONITOR_GO_STOP_BREAKPOINT;
+            break;
+        }
+
+        int executed = 0;
+        if (runtime->breakpoint_count > 0u) {
+            executed = pdp8_api_step(runtime->cpu);
+        } else {
+            executed = pdp8_api_run(runtime->cpu, MONITOR_RUN_SLICE);
+        }
         if (executed <= 0) {
             if (pdp8_api_is_halted(runtime->cpu)) {
                 reason = MONITOR_GO_STOP_HALT;
             } else if (pdp8_api_peek_interrupt_pending(runtime->cpu) > 0) {
                 reason = MONITOR_GO_STOP_INTERRUPT;
+            } else if (runtime->breakpoint_count > 0u &&
+                       monitor_breakpoint_hit(runtime, &hit_breakpoint)) {
+                reason = MONITOR_GO_STOP_BREAKPOINT;
             } else if (user_break) {
                 reason = MONITOR_GO_STOP_USER;
             } else {
@@ -3025,6 +3174,11 @@ static int go_run_until_event(struct monitor_runtime *runtime,
             break;
         }
 
+        if (monitor_breakpoint_hit(runtime, &hit_breakpoint)) {
+            reason = MONITOR_GO_STOP_BREAKPOINT;
+            break;
+        }
+
         go_pump_keyboard(runtime, &user_break);
         if (user_break) {
             reason = MONITOR_GO_STOP_USER;
@@ -3039,16 +3193,82 @@ static int go_run_until_event(struct monitor_runtime *runtime,
     if (stop_reason) {
         *stop_reason = reason;
     }
+    if (breakpoint_addr) {
+        *breakpoint_addr = hit_breakpoint;
+    }
     return total_executed;
 }
 
-static int run_with_console(struct monitor_runtime *runtime, size_t cycles) {
+static int run_with_console(struct monitor_runtime *runtime,
+                            size_t cycles,
+                            bool allow_breakpoint_step,
+                            bool *break_hit,
+                            uint16_t *breakpoint_addr) {
     if (!runtime || !runtime->cpu) {
         return -1;
+    }
+    if (break_hit) {
+        *break_hit = false;
+    }
+    if (breakpoint_addr) {
+        *breakpoint_addr = 0u;
     }
 
     size_t remaining = cycles;
     int total_executed = 0;
+
+    if (runtime->breakpoint_count > 0u) {
+        if (allow_breakpoint_step && remaining > 0u) {
+            uint16_t hit_addr = 0u;
+            if (monitor_breakpoint_hit(runtime, &hit_addr)) {
+                int executed = pdp8_api_step(runtime->cpu);
+                if (executed <= 0) {
+                    if (executed < 0) {
+                        total_executed = executed;
+                    }
+                    service_platform_keyboard(runtime);
+                    return total_executed;
+                }
+                total_executed += executed;
+                remaining -= (size_t)executed;
+            }
+        }
+
+        while (remaining > 0u) {
+            service_platform_keyboard(runtime);
+
+            uint16_t hit_addr = 0u;
+            if (monitor_breakpoint_hit(runtime, &hit_addr)) {
+                if (break_hit) {
+                    *break_hit = true;
+                }
+                if (breakpoint_addr) {
+                    *breakpoint_addr = hit_addr;
+                }
+                break;
+            }
+
+            int executed = pdp8_api_step(runtime->cpu);
+            if (executed <= 0) {
+                if (executed < 0) {
+                    total_executed = executed;
+                }
+                break;
+            }
+
+            total_executed += executed;
+            remaining -= (size_t)executed;
+
+            if (pdp8_api_is_halted(runtime->cpu)) {
+                break;
+            }
+
+            monitor_platform_idle();
+        }
+
+        service_platform_keyboard(runtime);
+        return total_executed;
+    }
 
     while (remaining > 0u) {
         service_platform_keyboard(runtime);
@@ -3099,6 +3319,11 @@ static bool monitor_runtime_create(struct monitor_runtime *runtime,
     if (pdp8_kl8e_console_attach(runtime->cpu, runtime->console) != 0) {
         monitor_runtime_teardown(runtime);
         return false;
+    }
+
+    runtime->breakpoints = (uint8_t *)calloc(runtime->memory_words, sizeof(uint8_t));
+    if (!runtime->breakpoints && runtime->memory_words > 0u) {
+        monitor_console_puts("Warning: unable to allocate breakpoint table.");
     }
 
     /* Attach interrupt control device (device 00; handles ION/IOFF/SKON) */

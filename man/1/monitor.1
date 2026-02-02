@@ -73,6 +73,10 @@ Execute exactly
 (default 1), printing PC/AC/LINK after each step.  Example:
 .BR "t 5" .
 .TP
+.B break
+Pop an address from the monitor stack and toggle a breakpoint at that location.
+Execution commands stop before running the instruction at the breakpoint.
+.TP
 .B kb \fItext\fP
 Queue
 .I text
