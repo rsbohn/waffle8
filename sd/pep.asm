@@ -46,5 +46,5 @@ CRLF,   0000
         JMP .-1
         TAD LF
         IOT 6046
-        JMS I CRLF
+        JMP I CRLF
 
