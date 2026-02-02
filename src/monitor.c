@@ -980,6 +980,8 @@ static enum monitor_command_status command_stack_pop_top(struct monitor_runtime 
                                                          char **state);
 static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
                                                 char **state);
+static enum monitor_command_status command_load(struct monitor_runtime *runtime,
+                                                char **state);
 static enum monitor_command_status command_save(struct monitor_runtime *runtime,
                                                 char **state);
 static enum monitor_command_status command_save_block(struct monitor_runtime *runtime,
@@ -987,6 +989,10 @@ static enum monitor_command_status command_save_block(struct monitor_runtime *ru
 static enum monitor_command_status command_save_image(struct monitor_runtime *runtime,
                                                       const char *path,
                                                       char **state);
+static enum monitor_command_status load_srec_and_report(struct monitor_runtime *runtime,
+                                                        const char *path);
+static char *build_srec_path(const char *source_path);
+static int run_assembler(const char *source_path, const char *output_path);
 static enum monitor_command_status command_continue(struct monitor_runtime *runtime,
                                                     char **state);
 static enum monitor_command_status command_go(struct monitor_runtime *runtime,
@@ -1044,6 +1050,7 @@ static const struct monitor_command monitor_commands[] = {
      "Inspect or manipulate the guest stack region.", true},
     {".", command_stack_pop_top, ".", "Pop and print the stack top.", false},
     {"edit", command_edit, "edit", "Read a DECtape block into the edit buffer (block on TOS).", true},
+    {"load", command_load, "load", "Assemble and load a DECtape block (block on TOS).", true},
     {"c", command_continue, "c [cycles]", "Continue execution (default 1 cycle).", true},
     {"t", command_trace, "t [cycles]", "Execute N cycles (default 1), showing registers after each.", true},
     {"go",
@@ -1665,25 +1672,14 @@ static enum monitor_command_status command_stack_pop_top(struct monitor_runtime 
     return stack_pop(runtime, 1u);
 }
 
-static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
-                                                char **state) {
+static enum monitor_command_status read_edit_block(struct monitor_runtime *runtime,
+                                                   uint16_t block) {
     if (!runtime || !runtime->cpu) {
-        return MONITOR_COMMAND_ERROR;
-    }
-
-    if (command_next_token(state)) {
-        monitor_console_puts("edit takes no arguments; push block number onto the stack.");
         return MONITOR_COMMAND_ERROR;
     }
 
     if (!runtime->tc08) {
         monitor_console_puts("TC08 device is not attached.");
-        return MONITOR_COMMAND_ERROR;
-    }
-
-    uint16_t block = 0u;
-    if (!stack_pop_value(runtime, &block)) {
-        monitor_console_puts("edit requires a block number on the stack.");
         return MONITOR_COMMAND_ERROR;
     }
 
@@ -1716,6 +1712,131 @@ static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
                            block & 0x0FFFu,
                            runtime->edit_base & 0x0FFFu);
     return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status write_edit_buffer_source(struct monitor_runtime *runtime,
+                                                            FILE *fp,
+                                                            size_t *out_bytes) {
+    if (!runtime || !runtime->cpu || !fp) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    const size_t block_words = 256u;
+    size_t bytes_written = 0u;
+    for (size_t i = 0u; i < block_words; ++i) {
+        uint16_t word = pdp8_api_read_mem(runtime->cpu,
+                                          (uint16_t)(runtime->edit_base + i));
+        unsigned char ch = (unsigned char)(word & 0xFFu);
+        if (ch == '\0') {
+            break;
+        }
+        if (fputc((int)ch, fp) == EOF) {
+            monitor_console_printf("Write failed for edit buffer: %s\n", strerror(errno));
+            return MONITOR_COMMAND_ERROR;
+        }
+        ++bytes_written;
+    }
+
+    if (out_bytes) {
+        *out_bytes = bytes_written;
+    }
+    return MONITOR_COMMAND_OK;
+}
+
+static enum monitor_command_status command_edit(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("edit takes no arguments; push block number onto the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (!runtime->tc08) {
+        monitor_console_puts("TC08 device is not attached.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t block = 0u;
+    if (!stack_pop_value(runtime, &block)) {
+        monitor_console_puts("edit requires a block number on the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    return read_edit_block(runtime, block);
+}
+
+static enum monitor_command_status command_load(struct monitor_runtime *runtime,
+                                                char **state) {
+    if (!runtime || !runtime->cpu) {
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    if (command_next_token(state)) {
+        monitor_console_puts("load takes no arguments; push block number onto the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    uint16_t block = 0u;
+    if (!stack_pop_value(runtime, &block)) {
+        monitor_console_puts("load requires a block number on the stack.");
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    enum monitor_command_status status = read_edit_block(runtime, block);
+    if (status != MONITOR_COMMAND_OK) {
+        return status;
+    }
+
+    char source_template[] = "/tmp/pdp8-block-XXXXXX";
+    int fd = mkstemp(source_template);
+    if (fd < 0) {
+        monitor_console_printf("Unable to create temp source file: %s\n", strerror(errno));
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    FILE *fp = fdopen(fd, "wb");
+    if (!fp) {
+        monitor_console_printf("Unable to open temp source file: %s\n", strerror(errno));
+        close(fd);
+        unlink(source_template);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    size_t bytes_written = 0u;
+    status = write_edit_buffer_source(runtime, fp, &bytes_written);
+    if (fclose(fp) != 0) {
+        monitor_console_printf("Unable to finalize temp source file: %s\n", strerror(errno));
+        unlink(source_template);
+        return MONITOR_COMMAND_ERROR;
+    }
+    if (status != MONITOR_COMMAND_OK) {
+        unlink(source_template);
+        return status;
+    }
+    if (bytes_written == 0u) {
+        monitor_console_printf("Block %04o is empty.\n", block & 0x0FFFu);
+        unlink(source_template);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    char *srec_path = build_srec_path(source_template);
+    if (!srec_path) {
+        monitor_console_puts("Unable to allocate S-record path.");
+        unlink(source_template);
+        return MONITOR_COMMAND_ERROR;
+    }
+
+    status = (run_assembler(source_template, srec_path) == 0)
+        ? load_srec_and_report(runtime, srec_path)
+        : MONITOR_COMMAND_ERROR;
+
+    unlink(source_template);
+    unlink(srec_path);
+    free(srec_path);
+    return status;
 }
 
 static enum monitor_command_status command_save_block(struct monitor_runtime *runtime,

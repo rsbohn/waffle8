@@ -60,6 +60,10 @@ Deposit consecutive words beginning at
 Pop a DECtape logical block number from the monitor stack and load the
 256-word block into the edit buffer at 05000 (octal).
 .TP
+.B load
+Pop a DECtape logical block number from the monitor stack, assemble the
+block contents, and load the resulting S-record into memory.
+.TP
 .B c [cycles]
 Continue execution in blocks of up to 2000 cycles.  Defaults to one cycle.
 .TP
