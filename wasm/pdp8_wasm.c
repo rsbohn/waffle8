@@ -53,7 +53,7 @@ static const uint16_t dullboy_rom[] = {
 };
 
 #define DULLBOY_ROM_SIZE (sizeof(dullboy_rom) / sizeof(dullboy_rom[0]))
-#define DULLBOY_START_ADDRESS 0x0100
+#define DULLBOY_START_ADDRESS 0x0080
 
 /* Initialize the emulator with dullboy program */
 EMSCRIPTEN_KEEPALIVE
@@ -134,8 +134,9 @@ int pdp8_step(int cycles) {
         if (pdp8_api_is_halted(g_cpu)) {
             break;
         }
-        if (pdp8_api_step(g_cpu) != 0) {
-            break;
+        int result = pdp8_api_step(g_cpu);
+        if (result == 0) {
+            break;  /* Error or halt */
         }
         executed++;
     }
