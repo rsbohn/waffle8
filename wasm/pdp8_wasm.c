@@ -26,6 +26,7 @@ static void console_output_callback(uint8_t ch, void *context) {
         size_t new_capacity = g_output_capacity ? g_output_capacity * 2 : 1024;
         char *new_buffer = realloc(g_output_buffer, new_capacity);
         if (!new_buffer) {
+            /* Allocation failed - drop this character rather than crash */
             return;
         }
         g_output_buffer = new_buffer;
@@ -187,11 +188,13 @@ const char *pdp8_get_output(void) {
         return "";
     }
     
-    /* Ensure null termination */
+    /* Ensure null termination - try to expand buffer if needed */
     if (g_output_len >= g_output_capacity) {
         char *new_buffer = realloc(g_output_buffer, g_output_capacity + 1);
         if (!new_buffer) {
-            return "";
+            /* Can't expand - return buffer without null termination risk
+             * JavaScript will use output_length to read exact bytes */
+            return g_output_buffer;
         }
         g_output_buffer = new_buffer;
         g_output_capacity++;
