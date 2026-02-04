@@ -109,16 +109,18 @@ The emulator is configured to automatically load and run the "dull boy" demo, wh
 - Uses the watchdog timer for timing delays
 - Runs continuously until stopped by the user
 
-The program starts at address 0x0100 (octal 0200) and includes:
-- Character-by-character output with delays for dramatic effect
+The program starts at address 0x0080 (octal 0200) and includes:
+- Character-by-character output with delays for dramatic effect  
 - Watchdog timer configuration and restart
 - Inline string printing routines
+
+**Note on Execution Speed**: The program includes very long delay loops (nested loops with ~8,192 iterations per character) to create a "typing" effect. With default speed settings, it takes many cycles before the first character appears. To see output faster, increase the execution speed slider to maximum (1000 cycles/frame).
 
 ## Technical Details
 
 ### Memory Layout
 
-- ROM loaded at: 0x0100 (256 decimal, 0200 octal)
+- ROM loaded at: 0x0080 (128 decimal, 0200 octal)
 - ROM size: ~100 words (12-bit PDP-8 words)
 - Total memory: 4K words (standard PDP-8 configuration)
 
