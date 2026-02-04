@@ -24,6 +24,8 @@ The WebAssembly build provides a self-contained, browser-based PDP-8 emulator th
 
 ### Build Steps
 
+#### Manual Build
+
 1. Install Emscripten (if not already installed):
    ```bash
    # On Ubuntu/Debian
@@ -39,6 +41,18 @@ The WebAssembly build provides a self-contained, browser-based PDP-8 emulator th
 This will generate:
 - `pdp8.js` - JavaScript loader and glue code
 - `pdp8.wasm` - WebAssembly binary containing the emulator and ROM
+
+#### Automated Build (GitHub Actions)
+
+The repository includes a GitHub Actions workflow that automatically builds the WASM resources on every push to the main branch or when changes are made to the emulator source code or WASM directory.
+
+The workflow:
+- Installs Emscripten
+- Builds the WASM module
+- Verifies the build artifacts
+- Uploads the artifacts for download
+
+To manually trigger the build, go to the Actions tab in GitHub and run the "Build WebAssembly" workflow.
 
 ## Running
 
