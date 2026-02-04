@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDP-8 WebAssembly Emulator - Dull Boy Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            border: 1px solid #333;
+        }
+
+        h1 {
+            color: #00ff88;
+            font-size: 2em;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+        }
+
+        .subtitle {
+            color: #aaa;
+            font-size: 0.9em;
+        }
+
+        .panel {
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .panel-header {
+            color: #00ff88;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
+        }
+
+        .terminal {
+            background: #000;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 5px;
+            min-height: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            box-shadow: inset 0 0 10px rgba(0, 255, 0, 0.1);
+            border: 1px solid #0f0;
+        }
+
+        .terminal::before {
+            content: '> ';
+            color: #00ff88;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc88 100%);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 255, 136, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #555;
+            color: #888;
+            cursor: not-allowed;
+        }
+
+        .registers {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .register {
+            background: rgba(0, 255, 136, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #00ff88;
+        }
+
+        .register-label {
+            color: #aaa;
+            font-size: 0.8em;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .register-value {
+            color: #00ff88;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .status {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .status-running {
+            border-left: 3px solid #0f0;
+        }
+
+        .status-halted {
+            border-left: 3px solid #f00;
+        }
+
+        .slider-control {
+            margin-bottom: 15px;
+        }
+
+        .slider-control label {
+            display: block;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #333;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #00ff88;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #00ff88;
+            cursor: pointer;
+            border: none;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 0.8em;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2em;
+            color: #00ff88;
+        }
+
+        .error {
+            background: rgba(255, 0, 0, 0.2);
+            border: 1px solid #f00;
+            color: #faa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PDP-8 WebAssembly Emulator</h1>
+            <p class="subtitle">Running "All work and no play makes Jack a dull boy"</p>
+            <p class="subtitle">Inspired by wanix - Self-contained browser-based emulation</p>
+        </header>
+
+        <div id="loading" class="loading">
+            Loading PDP-8 emulator...
+        </div>
+
+        <div id="app" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">Console Output</div>
+                <div id="terminal" class="terminal"></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">Controls</div>
+                <div id="status" class="status status-halted">Status: Initializing...</div>
+                <div class="controls">
+                    <button id="startBtn">Start</button>
+                    <button id="stopBtn" disabled>Stop</button>
+                    <button id="resetBtn">Reset</button>
+                    <button id="stepBtn">Step (100 cycles)</button>
+                </div>
+                <div class="slider-control">
+                    <label for="speedSlider">Execution Speed: <span id="speedValue">50</span> cycles/frame</label>
+                    <input type="range" id="speedSlider" min="1" max="1000" value="50">
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">CPU Registers</div>
+                <div class="registers">
+                    <div class="register">
+                        <span class="register-label">PC (Program Counter)</span>
+                        <span class="register-value" id="reg-pc">0000</span>
+                    </div>
+                    <div class="register">
+                        <span class="register-label">AC (Accumulator)</span>
+                        <span class="register-value" id="reg-ac">0000</span>
+                    </div>
+                    <div class="register">
+                        <span class="register-label">LINK</span>
+                        <span class="register-value" id="reg-link">0</span>
+                    </div>
+                    <div class="register">
+                        <span class="register-label">Cycles Executed</span>
+                        <span class="register-value" id="cycles">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>PDP-8 WebAssembly Emulator | Built with Emscripten</p>
+        <p>DEC PDP-8 minicomputer (1965) running in your browser</p>
+    </footer>
+
+    <script src="pdp8.js"></script>
+    <script>
+        let Module = null;
+        let running = false;
+        let animationId = null;
+        let totalCycles = 0;
+        let speedMultiplier = 50;
+
+        // UI elements
+        const loading = document.getElementById('loading');
+        const app = document.getElementById('app');
+        const terminal = document.getElementById('terminal');
+        const status = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const stepBtn = document.getElementById('stepBtn');
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
+        const regPC = document.getElementById('reg-pc');
+        const regAC = document.getElementById('reg-ac');
+        const regLink = document.getElementById('reg-link');
+        const cyclesDisplay = document.getElementById('cycles');
+
+        // Helper functions
+        function formatOctal(value, digits = 4) {
+            return value.toString(8).padStart(digits, '0');
+        }
+
+        function updateRegisters() {
+            if (!Module) return;
+            
+            const pc = Module._pdp8_get_pc();
+            const ac = Module._pdp8_get_ac();
+            const link = Module._pdp8_get_link();
+            
+            regPC.textContent = formatOctal(pc);
+            regAC.textContent = formatOctal(ac);
+            regLink.textContent = link;
+            cyclesDisplay.textContent = totalCycles.toLocaleString();
+        }
+
+        function updateOutput() {
+            if (!Module) return;
+            
+            const length = Module._pdp8_get_output_length();
+            if (length > 0) {
+                const ptr = Module._pdp8_get_output();
+                const output = Module.UTF8ToString(ptr);
+                if (output) {
+                    terminal.textContent += output;
+                    terminal.scrollTop = terminal.scrollHeight;
+                    Module._pdp8_clear_output();
+                }
+            }
+        }
+
+        function updateStatus() {
+            if (!Module) return;
+            
+            const halted = Module._pdp8_is_halted();
+            if (halted) {
+                status.textContent = 'Status: Halted';
+                status.className = 'status status-halted';
+                stop();
+            } else if (running) {
+                status.textContent = 'Status: Running';
+                status.className = 'status status-running';
+            } else {
+                status.textContent = 'Status: Stopped';
+                status.className = 'status status-halted';
+            }
+        }
+
+        function runFrame() {
+            if (!running || !Module) return;
+            
+            const cycles = Module._pdp8_step(speedMultiplier);
+            totalCycles += cycles;
+            
+            updateRegisters();
+            updateOutput();
+            updateStatus();
+            
+            if (cycles > 0 && !Module._pdp8_is_halted()) {
+                animationId = requestAnimationFrame(runFrame);
+            } else {
+                running = false;
+                updateStatus();
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+
+        function start() {
+            if (!Module || running) return;
+            
+            running = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            
+            updateStatus();
+            runFrame();
+        }
+
+        function stop() {
+            running = false;
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus();
+        }
+
+        function reset() {
+            stop();
+            if (!Module) return;
+            
+            Module._pdp8_reset();
+            totalCycles = 0;
+            terminal.textContent = '';
+            updateRegisters();
+            updateStatus();
+        }
+
+        function step() {
+            if (!Module || running) return;
+            
+            const cycles = Module._pdp8_step(100);
+            totalCycles += cycles;
+            
+            updateRegisters();
+            updateOutput();
+            updateStatus();
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', start);
+        stopBtn.addEventListener('click', stop);
+        resetBtn.addEventListener('click', reset);
+        stepBtn.addEventListener('click', step);
+        
+        speedSlider.addEventListener('input', (e) => {
+            speedMultiplier = parseInt(e.target.value);
+            speedValue.textContent = speedMultiplier;
+        });
+
+        // Initialize emulator
+        createPDP8Module().then((mod) => {
+            Module = mod;
+            
+            // Initialize the PDP-8 with dullboy program
+            const result = Module._pdp8_init();
+            if (result !== 0) {
+                loading.innerHTML = '<div class="error">Failed to initialize emulator</div>';
+                return;
+            }
+            
+            // Update UI
+            loading.style.display = 'none';
+            app.style.display = 'block';
+            
+            updateRegisters();
+            updateStatus();
+            
+            // Auto-start the emulator
+            start();
+        }).catch((err) => {
+            loading.innerHTML = `<div class="error">Failed to load emulator: ${err}</div>`;
+            console.error('Failed to load module:', err);
+        });
+    </script>
+</body>
+</html>

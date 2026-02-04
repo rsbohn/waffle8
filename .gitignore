@@ -18,3 +18,5 @@ magtape/*
 media/*
 tests/pdp8_tests
 trace-args
+wasm/*.js
+wasm/*.wasm
