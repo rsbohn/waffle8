@@ -1,0 +1,68 @@
+name: Build WebAssembly
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'wasm/**'
+      - 'src/emulator/**'
+      - '.github/workflows/build-wasm.yml'
+  pull_request:
+    paths:
+      - 'wasm/**'
+      - 'src/emulator/**'
+      - '.github/workflows/build-wasm.yml'
+  workflow_dispatch:
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install Emscripten
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y emscripten
+      
+      - name: Verify Emscripten installation
+        run: emcc --version
+      
+      - name: Build WASM module
+        run: |
+          cd wasm
+          ./build.sh
+      
+      - name: Verify build artifacts
+        run: |
+          if [ ! -f wasm/pdp8.js ]; then
+            echo "Error: pdp8.js not found"
+            exit 1
+          fi
+          if [ ! -f wasm/pdp8.wasm ]; then
+            echo "Error: pdp8.wasm not found"
+            exit 1
+          fi
+          echo "Build artifacts verified successfully"
+      
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp8-wasm
+          path: |
+            wasm/pdp8.js
+            wasm/pdp8.wasm
+            wasm/index.html
+          retention-days: 30
+      
+      - name: Display artifact info
+        run: |
+          echo "WASM module size:"
+          ls -lh wasm/pdp8.wasm
+          echo ""
+          echo "JavaScript glue code size:"
+          ls -lh wasm/pdp8.js

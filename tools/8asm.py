@@ -49,12 +49,30 @@ def print_records(records: Sequence[str]) -> None:
     for line in records:
         print(line)
 
+def _emit_rom_array(memory: Dict[int, int], start_addr: int, name: str) -> None:
+    if not memory:
+        raise AsmError("No output generated; empty program?")
+    min_addr = min(memory)
+    max_addr = max(memory)
+    words: List[int] = []
+    for addr in range(min_addr, max_addr + 1):
+        words.append(memory.get(addr, 0) & 0x0FFF)
+
+    print(f"static const uint16_t {name}[] = {{")
+    for i in range(0, len(words), 8):
+        chunk = ", ".join(f"0x{word:04x}" for word in words[i:i + 8])
+        print(f"    {chunk},")
+    print("};")
+    print(f"#define {name.upper()}_SIZE (sizeof({name}) / sizeof({name}[0]))")
+    print(f"#define {name.upper()}_START_ADDRESS 0x{start_addr:04x}")
+
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Assemble PDP-8 source into Motorola S-records.")
     parser.add_argument("source", type=Path, nargs="?", help="Input assembly file")
     parser.add_argument("output", type=Path, nargs="?", help="Optional S-record output file")
     parser.add_argument("--list", action="store_true", help="Print an assembly listing before the S-record output")
+    parser.add_argument("--rom", nargs="?", const="rom", help="Print a C ROM array to stdout (optional name)")
 
     if not argv:
         parser.print_help()
@@ -127,11 +145,16 @@ def main(argv: Sequence[str]) -> int:
         except AsmError as exc:
             print(exc, file=sys.stderr)
             return 1
+        if args.rom:
+            _emit_rom_array(memory, assembler.symbols.get("START", min(memory)), args.rom)
         return 0
 
     if listing_printed:
         print()
-    print_records(records)
+    if args.rom:
+        _emit_rom_array(memory, assembler.symbols.get("START", min(memory)), args.rom)
+    else:
+        print_records(records)
     return 0
 
 
